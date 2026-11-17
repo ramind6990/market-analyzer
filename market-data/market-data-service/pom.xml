@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.rmrx.market-analyzer</groupId>
+        <groupId>com.rmrx.market-nexus</groupId>
         <artifactId>market-data</artifactId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
@@ -16,11 +16,11 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.rmrx.market-analyzer</groupId>
+            <groupId>com.rmrx.market-nexus</groupId>
             <artifactId>exchange</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.rmrx.market-analyzer</groupId>
+            <groupId>com.rmrx.market-nexus</groupId>
             <artifactId>market-data-model</artifactId>
         </dependency>
 

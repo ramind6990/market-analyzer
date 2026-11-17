@@ -1,4 +1,4 @@
--- Exchanges known to the system (mirrors com.rmrx.marketanalyzer.exchange.model.ExchangeType).
+-- Exchanges known to the system (mirrors com.rmrx.marketnexus.exchange.model.ExchangeType).
 CREATE TYPE exchange_type AS ENUM ('CRYPTO_NOBITEX');
 
 -- Where a candle came from: the live stream, a batch fetch (reconciliation over the REST API),

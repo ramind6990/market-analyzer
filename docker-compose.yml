@@ -1,11 +1,11 @@
-# Local infrastructure for the market-analyzer project.
+# Local infrastructure for the market-nexus project.
 # Settings come from .env (copy .env.example to .env first).
-name: market-analyzer
+name: market-nexus
 
 services:
-  postgres:
+  market-nexus-postgres:
     image: postgres:17
-    container_name: market-analyzer-postgres
+    container_name: market-nexus-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-trading}
