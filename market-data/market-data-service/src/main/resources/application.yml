@@ -26,6 +26,10 @@ spring:
         linger.ms: 5
 
 market-data:
+  reconciliation:
+    m1-retention: 7d              # how long the exchange keeps M1 candles (Nobitex: 7 days)
+    retention-safety-margin: 1h   # keep jobs away from the retention edge
+    max-window-candles: 500       # max span of one job window when packing nearby gaps
   ingestion:
     exchange-type: CRYPTO_NOBITEX
     base-url: https://apiv2.nobitex.ir

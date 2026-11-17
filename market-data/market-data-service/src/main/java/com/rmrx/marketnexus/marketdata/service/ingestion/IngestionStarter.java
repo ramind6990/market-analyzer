@@ -26,7 +26,7 @@ public class IngestionStarter {
         this.properties = properties;
     }
 
-    @EventListener(ApplicationReadyEvent.class)
+   // @EventListener(ApplicationReadyEvent.class)
     public void start() {
         if (properties.symbols().isEmpty()) {
             log.warn("No symbols configured (market-data.ingestion.symbols); nothing to ingest");
