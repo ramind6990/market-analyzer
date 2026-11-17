@@ -27,16 +27,23 @@ spring:
 
 market-data:
   reconciliation:
-    m1-retention: 7d              # how long the exchange keeps M1 candles (Nobitex: 7 days)
     retention-safety-margin: 1h   # keep jobs away from the retention edge
-    max-window-candles: 500       # max span of one job window when packing nearby gaps
+    max-window-candles: 15       # max span of one job window when packing nearby gaps
+    schedule-interval: 5m         # pause between periodic registration runs
+    timeframes:
+      M1:
+        retention: 7d             # how long the exchange keeps M1 candles (Nobitex: 7 days)
+      H1:
+        retention: 30d            # first-run lookback (deeper H1 history comes from the separate script)
+        grid-offset: 30m          # Nobitex hours start at :30 UTC
   ingestion:
     exchange-type: CRYPTO_NOBITEX
     base-url: https://apiv2.nobitex.ir
     websocket-url: wss://ws.nobitex.ir/connection/websocket
     user-agent: TraderBot/rm-trading-0.0.1
     topic: m1-live
-    stream: mock                 # live = exchange WebSocket, mock = generated candles
+    stream: mock-gaps            # live = exchange WebSocket, mock = generated candles,
+                                 # mock-gaps = 100 candles/symbol from 8 h ago with 3-4 gaps (reconciliation test)
     mock-stream:
       emit-interval: 1s          # one simulated minute per second and symbol
       seed: 42

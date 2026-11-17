@@ -2,8 +2,6 @@ package com.rmrx.marketnexus.marketdata.service.ingestion;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import com.rmrx.marketnexus.exchange.client.ExchangeStreamClient;
 import com.rmrx.marketnexus.exchange.model.ExchangeSymbol;
@@ -26,7 +24,6 @@ public class IngestionStarter {
         this.properties = properties;
     }
 
-   // @EventListener(ApplicationReadyEvent.class)
     public void start() {
         if (properties.symbols().isEmpty()) {
             log.warn("No symbols configured (market-data.ingestion.symbols); nothing to ingest");

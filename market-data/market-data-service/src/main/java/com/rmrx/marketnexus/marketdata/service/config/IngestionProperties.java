@@ -48,7 +48,8 @@ public record IngestionProperties(
         worker = worker == null ? new Worker(null, null, null, null) : worker;
     }
 
-    public enum StreamMode { LIVE, MOCK }
+    /** LIVE = exchange WebSocket, MOCK = endless generated candles, MOCK_GAPS = one-off history with gaps (reconciliation tests). */
+    public enum StreamMode { LIVE, MOCK, MOCK_GAPS }
 
     public enum PublisherType { KAFKA, LOGGING }
 

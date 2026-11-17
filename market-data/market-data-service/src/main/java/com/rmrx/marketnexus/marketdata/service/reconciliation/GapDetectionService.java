@@ -16,7 +16,7 @@ import java.util.Map;
  * <p>
  * Checked range per symbol: open times in {@code (start, upTo]} where
  * <ul>
- *   <li>{@code start} = the given watermark, or (if {@code null}) one timeframe before the oldest stored candle;</li>
+ *   <li>{@code start} = the given watermark (required; new series are seeded with the retention horizon);</li>
  *   <li>{@code upTo} = the last closed candle, i.e. one before the ongoing one (the ongoing candle is not closed yet).
  *       A just-closed candle that has not arrived from the stream yet is reported as a gap; that is harmless, since
  *       repairs are upserts.</li>
@@ -42,7 +42,7 @@ public class GapDetectionService {
     /**
      * Checks several symbols of one exchange and timeframe at once.
      *
-     * @param watermarks symbol → open time up to which that series is already verified gap-free ({@code null} = never checked)
+     * @param watermarks symbol → open time up to which that series is already verified gap-free (not null)
      * @return one result per symbol, in the map's iteration order
      */
     public List<GapCheckResult> check(String exchange, Timeframe timeframe, Map<String, Instant> watermarks) {

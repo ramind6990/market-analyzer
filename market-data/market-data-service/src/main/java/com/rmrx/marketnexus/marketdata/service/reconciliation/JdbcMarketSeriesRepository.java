@@ -37,14 +37,14 @@ public class JdbcMarketSeriesRepository implements MarketSeriesRepository {
             """;
 
     private static final String INSERT_MISSING = """
-            INSERT INTO market_series (exchange, symbol, timeframe)
-            SELECT CAST(:exchange AS exchange_type), s.symbol, :timeframe
+            INSERT INTO market_series (exchange, symbol, timeframe, verification_watermark)
+            SELECT CAST(:exchange AS exchange_type), s.symbol, :timeframe, :initialWatermark
             FROM unnest(CAST(:symbols AS text[])) AS s(symbol)
             ON CONFLICT (exchange, symbol, timeframe) DO NOTHING
             """;
 
     private static final String SELECT_WATERMARKS = """
-            SELECT symbol, verification_watermark
+            SELECT symbol, COALESCE(verification_watermark, :initialWatermark) AS verification_watermark
             FROM market_series
             WHERE exchange = CAST(:exchange AS exchange_type) AND timeframe = :timeframe
               AND symbol = ANY(CAST(:symbols AS text[]))
@@ -57,18 +57,21 @@ public class JdbcMarketSeriesRepository implements MarketSeriesRepository {
     }
 
     @Override
-    public Map<String, Instant> findWatermarks(String exchange, Timeframe timeframe, List<String> symbols) {
+    public Map<String, Instant> findWatermarks(String exchange, Timeframe timeframe, List<String> symbols,
+                                               Instant initialWatermark) {
         String[] symbolArray = symbols.toArray(String[]::new);
         jdbc.sql(INSERT_MISSING)
                 .param("exchange", exchange)
                 .param("timeframe", timeframe.name())
                 .param("symbols", symbolArray)
+                .param("initialWatermark", Timestamp.from(initialWatermark))
                 .update();
         Map<String, Instant> stored = new HashMap<>();
         jdbc.sql(SELECT_WATERMARKS)
                 .param("exchange", exchange)
                 .param("timeframe", timeframe.name())
                 .param("symbols", symbolArray)
+                .param("initialWatermark", Timestamp.from(initialWatermark))
                 .query(rs -> {
                     stored.put(rs.getString("symbol"), instant(rs, "verification_watermark"));
                 });

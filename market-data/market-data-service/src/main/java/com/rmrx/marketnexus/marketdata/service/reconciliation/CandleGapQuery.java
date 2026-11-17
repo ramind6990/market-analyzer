@@ -9,13 +9,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Finds missing candles for many symbols of one exchange and timeframe in a single statement.
  * <p>
- * Per symbol: the checked range is {@code (after, upTo]} where {@code after} is the given watermark (or, if
- * {@code null}, one step before the oldest stored candle) and {@code upTo} is the last closed candle (one before the ongoing one), on the
- * series' own grid. Two sentinel rows (the range start, and one step past the range end) are added to the stored open
+ * Per symbol: the checked range is {@code (after, upTo]} where {@code after} is the given watermark and {@code upTo}
+ * is the last closed candle (one before the ongoing one), on the series' own grid. Two sentinel rows (the range start, and one step past the range end) are added to the stored open
  * times, so a single {@code lag} pass finds leading, inner and trailing gaps alike. {@code LEFT JOIN LATERAL} keeps one
  * primary-key index range scan per symbol (rows come back already ordered by {@code open_time}, no sort), and every
  * symbol returns at least one row, even without gaps.
@@ -24,18 +24,9 @@ import java.util.Map;
 public class CandleGapQuery {
 
     private static final String FIND_GAPS = """
-            WITH req AS (
-                SELECT s.symbol, s.after_epoch
+            WITH starts AS (
+                SELECT s.symbol, to_timestamp(s.after_epoch) AS after_t
                 FROM unnest(CAST(:symbols AS text[]), CAST(:afters AS bigint[])) AS s(symbol, after_epoch)
-            ),
-            starts AS (
-                SELECT r.symbol,
-                       COALESCE(to_timestamp(r.after_epoch),
-                                (SELECT min(c.open_time) FROM candle c
-                                 WHERE c.exchange = CAST(:exchange AS exchange_type)
-                                   AND c.symbol = r.symbol AND c.timeframe = :timeframe)
-                                - make_interval(secs => :step)) AS after_t
-                FROM req r
             ),
             bounds AS (
                 SELECT s.symbol, s.after_t,
@@ -57,8 +48,7 @@ public class CandleGapQuery {
                         AND c.open_time > b.after_t AND c.open_time <= b.up_to
                       UNION ALL
                       SELECT b.up_to + make_interval(secs => :step)) pts
-            ) g ON b.after_t IS NOT NULL
-               AND g.prev_open IS NOT NULL
+            ) g ON g.prev_open IS NOT NULL
                AND g.open_time - g.prev_open > make_interval(secs => :step)
             ORDER BY b.symbol, gap_from NULLS FIRST
             """;
@@ -70,7 +60,7 @@ public class CandleGapQuery {
     }
 
     /**
-     * @param watermarks symbol → watermark ({@code null} = never checked, start at the oldest stored candle)
+     * @param watermarks symbol → watermark: the check covers open times after it (must not be null)
      * @param now        current time; the ongoing (not yet closed) candle is excluded relative to it
      * @return one result per requested symbol, in the order of {@code watermarks}
      */
@@ -78,7 +68,7 @@ public class CandleGapQuery {
                                          Instant now) {
         String[] symbols = watermarks.keySet().toArray(String[]::new);
         Long[] afters = watermarks.values().stream()
-                .map(watermark -> watermark == null ? null : watermark.getEpochSecond())
+                .map(watermark -> Objects.requireNonNull(watermark, "watermark").getEpochSecond())
                 .toArray(Long[]::new);
 
         Map<String, Builder> bySymbol = new LinkedHashMap<>();
@@ -103,9 +93,8 @@ public class CandleGapQuery {
                 });
 
         List<GapCheckResult> results = new ArrayList<>(bySymbol.size());
-        bySymbol.forEach((symbol, builder) -> results.add(builder.after == null
-                ? new GapCheckResult(exchange, symbol, timeframe, null, null, List.of())   // no candles stored
-                : new GapCheckResult(exchange, symbol, timeframe, builder.after, builder.upTo, builder.gaps)));
+        bySymbol.forEach((symbol, builder) -> results.add(
+                new GapCheckResult(exchange, symbol, timeframe, builder.after, builder.upTo, builder.gaps)));
         return results;
     }
 

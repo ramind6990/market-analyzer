@@ -3,6 +3,7 @@ package com.rmrx.marketnexus.exchange.client;
 import com.rmrx.marketnexus.exchange.config.ExchangeConfig;
 import com.rmrx.marketnexus.exchange.crypto.nobitex.NobitexExchangeClient;
 import com.rmrx.marketnexus.exchange.crypto.nobitex.NobitexExchangeStreamClient;
+import com.rmrx.marketnexus.exchange.crypto.nobitex.NobitexGapMockStreamClient;
 import com.rmrx.marketnexus.exchange.crypto.nobitex.NobitexMockStreamClient;
 import com.rmrx.marketnexus.exchange.model.ExchangeType;
 
@@ -40,6 +41,19 @@ public final class ExchangeClients {
         Objects.requireNonNull(exchangeType, "exchangeType");
         return switch (exchangeType) {
             case CRYPTO_NOBITEX -> new NobitexMockStreamClient(emitInterval, seed);
+        };
+    }
+
+    /**
+     * Creates a fake stream for testing reconciliation: on connect it emits, once, 100 closed candles per subscription
+     * starting 8 hours ago, with 3–4 random gaps of 6–15 missing candles each (logged), then stays silent.
+     *
+     * @param seed random seed, so the same gaps can be reproduced
+     */
+    public static ExchangeStreamClient createGapMockStream(ExchangeType exchangeType, long seed) {
+        Objects.requireNonNull(exchangeType, "exchangeType");
+        return switch (exchangeType) {
+            case CRYPTO_NOBITEX -> new NobitexGapMockStreamClient(seed);
         };
     }
 }
