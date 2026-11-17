@@ -1,0 +1,11 @@
+target/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Local infrastructure
+docker-data/
+.docker-data/
+.env
+docs/

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.rmrx.market-analyzer</groupId>
+        <artifactId>market-analyzer</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>market-data</artifactId>
+    <packaging>pom</packaging>
+    <name>market-data</name>
+    <description>Market data: shared model, the market-data service (Spring Boot) and later the Flink candle aggregator</description>
+
+    <modules>
+        <module>market-data-model</module>
+        <module>market-data-service</module>
+    </modules>
+</project>

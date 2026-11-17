@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.rmrx.market-analyzer</groupId>
+        <artifactId>market-analyzer</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>exchange</artifactId>
+    <name>exchange</name>
+
+    <properties>
+        <centrifuge-java.version>0.8.1</centrifuge-java.version>
+    </properties>
+
+    <dependencies>
+        <!-- Centrifugo client, used for the Nobitex WebSocket API -->
+        <dependency>
+            <groupId>io.github.centrifugal</groupId>
+            <artifactId>centrifuge-java</artifactId>
+            <version>${centrifuge-java.version}</version>
+        </dependency>
+        <!-- Logging backend for the demo main classes only; optional so it never reaches modules
+             that depend on exchange (Spring Boot apps use Logback) -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <scope>runtime</scope>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+</project>
