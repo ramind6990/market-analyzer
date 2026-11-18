@@ -7,5 +7,4 @@ target/
 # Local infrastructure
 docker-data/
 .docker-data/
-.env
 docs/
