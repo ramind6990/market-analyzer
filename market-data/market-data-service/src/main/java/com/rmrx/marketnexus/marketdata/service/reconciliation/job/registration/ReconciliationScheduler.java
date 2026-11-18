@@ -1,4 +1,4 @@
-package com.rmrx.marketnexus.marketdata.service.reconciliation;
+package com.rmrx.marketnexus.marketdata.service.reconciliation.job.registration;
 
 import com.rmrx.marketnexus.marketdata.service.config.ReconciliationProperties;
 import org.slf4j.Logger;

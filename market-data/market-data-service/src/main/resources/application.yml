@@ -30,6 +30,15 @@ market-data:
     retention-safety-margin: 1h   # keep jobs away from the retention edge
     max-window-candles: 15       # max span of one job window when packing nearby gaps
     schedule-interval: 5m         # pause between periodic registration runs
+    fetch-chunk-candles: 500      # max candles per job execution (one REST call)
+    max-attempts: 5               # failed executions before a job is FAILED
+    retry-backoff: 1m             # wait before retry; doubles per attempt, max 1h
+    recent-window: 1h             # job windows ending within this of now are executed first
+    worker:
+      threads: 3                  # concurrent executions; the shared rate limit bounds throughput
+      claim-batch-size: 10        # jobs claimed at once when the queue runs low (<= requests-per-minute)
+      idle-poll-interval: 5s      # sleep when no job is due
+      requests-per-minute: 35     # shared budget of REST calls per minute (Nobitex ~60/min)
     timeframes:
       M1:
         retention: 7d             # how long the exchange keeps M1 candles (Nobitex: 7 days)

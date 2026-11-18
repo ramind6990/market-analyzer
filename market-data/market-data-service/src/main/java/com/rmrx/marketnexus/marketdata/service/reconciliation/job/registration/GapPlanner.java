@@ -1,4 +1,8 @@
-package com.rmrx.marketnexus.marketdata.service.reconciliation;
+package com.rmrx.marketnexus.marketdata.service.reconciliation.job.registration;
+
+import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.Gap;
+import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.GapCheckResult;
+import com.rmrx.marketnexus.marketdata.service.reconciliation.job.FetchWindow;
 
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
 
@@ -26,16 +30,6 @@ final class GapPlanner {
     record Clipped(List<Gap> recoverable, List<Gap> unrecoverable) {
     }
 
-    /**
-     * First open time that can still be fetched: {@code now − retention}, rounded up to the series' candle grid.
-     *
-     * @param reference any open time of the series (defines the grid, e.g. Nobitex hours start at :30 UTC)
-     */
-    static Instant horizon(Instant now, Duration retention, Instant reference, Timeframe timeframe) {
-        Instant raw = now.minus(retention);
-        Instant down = alignDown(raw, reference, timeframe);
-        return down.equals(raw) ? raw : down.plus(timeframe.duration());
-    }
 
     /** Splits gaps into the parts at/after the horizon (recoverable) and before it (unrecoverable). */
     static Clipped clipToHorizon(List<Gap> gaps, Instant horizon, Timeframe timeframe) {
@@ -126,10 +120,20 @@ final class GapPlanner {
         return remaining;
     }
 
-    /** Start of the candle containing {@code time}, on the grid defined by {@code reference}. */
-    static Instant alignDown(Instant time, Instant reference, Timeframe timeframe) {
-        long step = timeframe.duration().toSeconds();
-        long offset = Math.floorMod(time.getEpochSecond() - reference.getEpochSecond(), step);
-        return Instant.ofEpochSecond(time.getEpochSecond() - offset);
+    /** Job priorities: lower runs first. */
+    static final int PRIORITY_HIGH = 0;
+    static final int PRIORITY_MEDIUM = 1;
+    static final int PRIORITY_LOW = 2;
+
+    /**
+     * Execution priority of a job window: HIGH if it ends within {@code recentWindow} of now (a recent gap matters for
+     * live data), MEDIUM for timeframes above M1 (few calls, needed by the aggregation), LOW otherwise (backfill).
+     */
+    static int priority(FetchWindow window, Timeframe timeframe, Instant now, Duration recentWindow) {
+        if (!window.to().isBefore(now.minus(recentWindow))) {
+            return PRIORITY_HIGH;
+        }
+        return timeframe == Timeframe.M1 ? PRIORITY_LOW : PRIORITY_MEDIUM;
     }
+
 }

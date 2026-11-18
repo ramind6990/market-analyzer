@@ -1,4 +1,4 @@
-package com.rmrx.marketnexus.marketdata.service.reconciliation;
+package com.rmrx.marketnexus.marketdata.service.reconciliation.series;
 
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
 
