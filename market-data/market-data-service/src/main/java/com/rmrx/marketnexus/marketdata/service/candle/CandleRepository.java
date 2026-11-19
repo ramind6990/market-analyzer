@@ -21,4 +21,13 @@ public interface CandleRepository {
      *         identical candles already stored are not returned
      */
     List<UpsertedCandle> upsertAll(List<Candle> candles, CandleSource source);
+
+    /**
+     * Upserts derived candles (source {@code DERIVED}) from the Flink aggregator, partial ({@code closed = false}) or
+     * final, possibly of several series, in one statement. Several updates of the same candle: the last one wins.
+     * A partial update never overwrites a closed candle.
+     *
+     * @return the candles whose row was inserted or changed (values or {@code closed}), in input order
+     */
+    List<DerivedCandle> upsertDerivedAll(List<DerivedCandle> candles);
 }

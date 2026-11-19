@@ -42,12 +42,12 @@ public class MarketDataServiceApplication implements ApplicationRunner {
     /** Startup order: register gaps up to now → start executing jobs → start the live stream. */
     @Override
     public void run(ApplicationArguments args) {
-//        try {
-//            registrar.registerAll();
-//        } catch (RuntimeException e) {
-//            log.error("Startup reconciliation registration failed; continuing", e);
-//        }
+        try {
+            registrar.registerAll();
+        } catch (RuntimeException e) {
+            log.error("Startup reconciliation registration failed; continuing", e);
+        }
         reconciliationWorker.start();
-      //  ingestionStarter.start();
+        ingestionStarter.start();
     }
 }

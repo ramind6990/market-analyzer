@@ -14,7 +14,8 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Finds missing candles for many symbols of one exchange and timeframe in a single statement.
+ * Finds missing candles for many symbols of one exchange and timeframe in a single statement. Only closed candles
+ * count: a partial derived candle (still forming in the Flink aggregator) is treated as missing.
  * <p>
  * Per symbol: the checked range is {@code (after, upTo]} where {@code after} is the given watermark and {@code upTo}
  * is the last closed candle (one before the ongoing one), on the series' own grid. Two sentinel rows (the range start, and one step past the range end) are added to the stored open
@@ -48,6 +49,7 @@ public class CandleGapQuery {
                       WHERE c.exchange = CAST(:exchange AS exchange_type)
                         AND c.symbol = b.symbol AND c.timeframe = :timeframe
                         AND c.open_time > b.after_t AND c.open_time <= b.up_to
+                        AND c.closed
                       UNION ALL
                       SELECT b.up_to + make_interval(secs => :step)) pts
             ) g ON g.prev_open IS NOT NULL

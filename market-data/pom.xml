@@ -18,5 +18,6 @@
     <modules>
         <module>market-data-model</module>
         <module>market-data-service</module>
+        <module>market-data-aggregator</module>
     </modules>
 </project>

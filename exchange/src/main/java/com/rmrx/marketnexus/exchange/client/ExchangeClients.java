@@ -1,6 +1,7 @@
 package com.rmrx.marketnexus.exchange.client;
 
 import com.rmrx.marketnexus.exchange.config.ExchangeConfig;
+import com.rmrx.marketnexus.exchange.crypto.nobitex.NobitexClockMockStreamClient;
 import com.rmrx.marketnexus.exchange.crypto.nobitex.NobitexExchangeClient;
 import com.rmrx.marketnexus.exchange.crypto.nobitex.NobitexExchangeStreamClient;
 import com.rmrx.marketnexus.exchange.crypto.nobitex.NobitexGapMockStreamClient;
@@ -41,6 +42,19 @@ public final class ExchangeClients {
         Objects.requireNonNull(exchangeType, "exchangeType");
         return switch (exchangeType) {
             case CRYPTO_NOBITEX -> new NobitexMockStreamClient(emitInterval, seed);
+        };
+    }
+
+    /**
+     * Creates a fake stream that follows the real clock, like the real WebSocket: each subscription emits one closed
+     * candle per period, shortly after the period ends (e.g. the 10:03 M1 at about 10:04:02).
+     *
+     * @param seed random seed, so the generated prices can be reproduced
+     */
+    public static ExchangeStreamClient createClockMockStream(ExchangeType exchangeType, long seed) {
+        Objects.requireNonNull(exchangeType, "exchangeType");
+        return switch (exchangeType) {
+            case CRYPTO_NOBITEX -> new NobitexClockMockStreamClient(seed);
         };
     }
 

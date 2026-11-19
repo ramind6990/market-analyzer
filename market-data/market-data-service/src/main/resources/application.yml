@@ -16,7 +16,7 @@ spring:
     locations: classpath:db/migration
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9892}   # .infra compose: EXTERNAL listener for the host
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
@@ -24,8 +24,28 @@ spring:
       properties:
         enable.idempotence: true
         linger.ms: 5
+    consumer:                     # candles-derived (from the Flink aggregator); used in kafka mode only
+      group-id: ${KAFKA_GROUP_ID:market-data-service}
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      auto-offset-reset: earliest
+      # Batches for the derived-candle listener: the broker answers once ~20+ messages (8 KB) are waiting
+      # or after 1 s, whichever comes first; at most 500 records per batch (one upsert statement each).
+      fetch-min-size: 8KB
+      fetch-max-wait: 1s
+      max-poll-records: 500
 
 market-data:
+  kafka:
+    mode: ${MARKET_DATA_KAFKA_MODE:kafka}  # kafka = real Kafka (publish, consume candles-derived, create topics),
+                                  # logging = no broker: only log what would be published
+    topics:
+      m1-live: m1-live            # live M1 (ingestion -> Flink)
+      m1-reconciled: m1-reconciled  # M1 written by reconciliation (-> Flink)
+      h1-reconciled: h1-reconciled  # H1 written by reconciliation (-> Flink H1 stage)
+      candles-derived: candles-derived  # progressive M5..D1 (Flink -> this service)
+      partitions: 3               # for topics created by the service
+      replicas: 1
   reconciliation:
     retention-safety-margin: 1h   # keep jobs away from the retention edge
     max-window-candles: 15       # max span of one job window when packing nearby gaps
@@ -50,13 +70,12 @@ market-data:
     base-url: https://apiv2.nobitex.ir
     websocket-url: wss://ws.nobitex.ir/connection/websocket
     user-agent: TraderBot/rm-trading-0.0.1
-    topic: m1-live
-    stream: mock-gaps            # live = exchange WebSocket, mock = generated candles,
+    stream: mock-gaps            # live = exchange WebSocket, mock = generated candles (fast, simulated time),
+                                 # mock-clock = generated candles following the real clock (like the WebSocket),
                                  # mock-gaps = 100 candles/symbol from 8 h ago with 3-4 gaps (reconciliation test)
     mock-stream:
       emit-interval: 1s          # one simulated minute per second and symbol
       seed: 42
-    publisher: logging           # kafka = real Kafka, logging = only log what would be sent
     worker:
       min-pool-size: 1
       max-pool-size: 5

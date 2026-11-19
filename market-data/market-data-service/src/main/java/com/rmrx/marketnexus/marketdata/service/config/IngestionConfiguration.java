@@ -16,13 +16,15 @@ public class IngestionConfiguration {
                 .withWebsocketUrl(properties.websocketUrl());
     }
 
-    /** Real exchange WebSocket, or a generated stream ({@code market-data.ingestion.stream: live | mock | mock-gaps}). */
+    /** Real exchange WebSocket, or a generated stream ({@code market-data.ingestion.stream: live | mock | mock-clock | mock-gaps}). */
     @Bean(destroyMethod = "close")
     ExchangeStreamClient exchangeStreamClient(ExchangeConfig exchangeConfig, IngestionProperties properties) {
         return switch (properties.stream()) {
             case LIVE -> ExchangeClients.createStream(exchangeConfig);
             case MOCK -> ExchangeClients.createMockStream(properties.exchangeType(),
                     properties.mockStream().emitInterval(), properties.mockStream().seed());
+            case MOCK_CLOCK -> ExchangeClients.createClockMockStream(properties.exchangeType(),
+                    properties.mockStream().seed());
             case MOCK_GAPS -> ExchangeClients.createGapMockStream(properties.exchangeType(),
                     properties.mockStream().seed());
         };

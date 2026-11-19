@@ -10,9 +10,11 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 /** {@link CandleRepository} on PostgreSQL with plain JDBC ({@link JdbcClient}). */
@@ -21,14 +23,15 @@ public class JdbcCandleRepository implements CandleRepository {
 
     /** Insert, or update only when the values differ: an identical re-delivery changes nothing and reports 0 rows. */
     private static final String UPSERT = """
-            INSERT INTO candle AS c (exchange, symbol, timeframe, open_time, open, high, low, close, volume, source)
+            INSERT INTO candle AS c (exchange, symbol, timeframe, open_time, open, high, low, close, volume, source, closed)
             VALUES (CAST(:exchange AS exchange_type), :symbol, :timeframe, :openTime, :open, :high, :low, :close,
-                    :volume, CAST(:source AS candle_source))
+                    :volume, CAST(:source AS candle_source), true)
             ON CONFLICT (exchange, symbol, timeframe, open_time) DO UPDATE
             SET open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
-                volume = EXCLUDED.volume, source = EXCLUDED.source, updated_at = now()
-            WHERE (c.open, c.high, c.low, c.close, c.volume)
-                  IS DISTINCT FROM (EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume)
+                volume = EXCLUDED.volume, source = EXCLUDED.source, closed = EXCLUDED.closed, updated_at = now()
+            WHERE (c.open, c.high, c.low, c.close, c.volume, c.closed)
+                  IS DISTINCT FROM (EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume,
+                                    EXCLUDED.closed)
             """;
 
     /**
@@ -36,19 +39,45 @@ public class JdbcCandleRepository implements CandleRepository {
      * values changed are returned; {@code xmax = 0} marks a freshly inserted row.
      */
     private static final String UPSERT_ALL = """
-            INSERT INTO candle AS c (exchange, symbol, timeframe, open_time, open, high, low, close, volume, source)
+            INSERT INTO candle AS c (exchange, symbol, timeframe, open_time, open, high, low, close, volume, source, closed)
             SELECT CAST(:exchange AS exchange_type), :symbol, :timeframe, to_timestamp(u.open_epoch),
-                   u.open, u.high, u.low, u.close, u.volume, CAST(:source AS candle_source)
+                   u.open, u.high, u.low, u.close, u.volume, CAST(:source AS candle_source), true
             FROM unnest(CAST(:openEpochs AS bigint[]), CAST(:opens AS numeric[]), CAST(:highs AS numeric[]),
                         CAST(:lows AS numeric[]), CAST(:closes AS numeric[]), CAST(:volumes AS numeric[]))
                  AS u(open_epoch, open, high, low, close, volume)
             ON CONFLICT (exchange, symbol, timeframe, open_time) DO UPDATE
             SET open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
-                volume = EXCLUDED.volume, source = EXCLUDED.source, updated_at = now()
-            WHERE (c.open, c.high, c.low, c.close, c.volume)
-                  IS DISTINCT FROM (EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume)
+                volume = EXCLUDED.volume, source = EXCLUDED.source, closed = EXCLUDED.closed, updated_at = now()
+            WHERE (c.open, c.high, c.low, c.close, c.volume, c.closed)
+                  IS DISTINCT FROM (EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume,
+                                    EXCLUDED.closed)
             RETURNING c.open_time, (c.xmax = 0) AS inserted
             """;
+
+    /**
+     * Many derived candles (source DERIVED), possibly of several series, in one statement. A row is updated only when
+     * its values or {@code closed} differ, and a partial update ({@code closed = false}) never overwrites a closed row.
+     * Returns the rows that were inserted or changed.
+     */
+    private static final String UPSERT_DERIVED_ALL = """
+            INSERT INTO candle AS c (exchange, symbol, timeframe, open_time, open, high, low, close, volume, source, closed)
+            SELECT CAST(u.exchange AS exchange_type), u.symbol, u.timeframe, to_timestamp(u.open_epoch),
+                   u.open, u.high, u.low, u.close, u.volume, CAST('DERIVED' AS candle_source), u.closed
+            FROM unnest(CAST(:exchanges AS text[]), CAST(:symbols AS text[]), CAST(:timeframes AS text[]),
+                        CAST(:openEpochs AS bigint[]), CAST(:opens AS numeric[]), CAST(:highs AS numeric[]),
+                        CAST(:lows AS numeric[]), CAST(:closes AS numeric[]), CAST(:volumes AS numeric[]),
+                        CAST(:closeds AS boolean[]))
+                 AS u(exchange, symbol, timeframe, open_epoch, open, high, low, close, volume, closed)
+            ON CONFLICT (exchange, symbol, timeframe, open_time) DO UPDATE
+            SET open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
+                volume = EXCLUDED.volume, source = EXCLUDED.source, closed = EXCLUDED.closed, updated_at = now()
+            WHERE NOT (c.closed AND NOT EXCLUDED.closed)
+              AND (c.open, c.high, c.low, c.close, c.volume, c.closed)
+                  IS DISTINCT FROM (EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume,
+                                    EXCLUDED.closed)
+            RETURNING CAST(c.exchange AS text) AS exchange, c.symbol, c.timeframe, c.open_time
+            """;
+
 
     private final JdbcClient jdbc;
 
@@ -121,5 +150,39 @@ public class JdbcCandleRepository implements CandleRepository {
                 .param("source", CandleSource.STREAM.name())
                 .update();
         return rows > 0;
+    }
+
+    @Override
+    public List<DerivedCandle> upsertDerivedAll(List<DerivedCandle> candles) {
+        if (candles.isEmpty()) {
+            return List.of();
+        }
+        // One row per candle (a statement may not update the same row twice); the last update wins.
+        Map<String, DerivedCandle> byKey = new LinkedHashMap<>();
+        for (DerivedCandle candle : candles) {
+            byKey.remove(candle.rowKey());
+            byKey.put(candle.rowKey(), candle);
+        }
+        List<DerivedCandle> rows = List.copyOf(byKey.values());
+        List<Candle> plain = rows.stream().map(DerivedCandle::candle).toList();
+
+        Set<String> written = new HashSet<>();
+        jdbc.sql(UPSERT_DERIVED_ALL)
+                .param("exchanges", plain.stream().map(Candle::exchange).toArray(String[]::new))
+                .param("symbols", plain.stream().map(Candle::symbol).toArray(String[]::new))
+                .param("timeframes", plain.stream().map(c -> c.timeframe().name()).toArray(String[]::new))
+                .param("openEpochs", plain.stream().map(c -> c.openTime().getEpochSecond()).toArray(Long[]::new))
+                .param("opens", decimals(plain, Candle::open))
+                .param("highs", decimals(plain, Candle::high))
+                .param("lows", decimals(plain, Candle::low))
+                .param("closes", decimals(plain, Candle::close))
+                .param("volumes", decimals(plain, Candle::volume))
+                .param("closeds", rows.stream().map(DerivedCandle::closed).toArray(Boolean[]::new))
+                .query(rs -> {
+                    written.add(rs.getString("exchange") + ":" + rs.getString("symbol") + ":"
+                            + rs.getString("timeframe") + ":"
+                            + rs.getObject("open_time", OffsetDateTime.class).toEpochSecond());
+                });
+        return rows.stream().filter(row -> written.contains(row.rowKey())).toList();
     }
 }

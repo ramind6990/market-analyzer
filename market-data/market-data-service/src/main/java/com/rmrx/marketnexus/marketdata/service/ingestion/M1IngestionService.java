@@ -9,6 +9,7 @@ import com.rmrx.marketnexus.exchange.model.ExchangeSymbol;
 import com.rmrx.marketnexus.exchange.model.ExchangeTimeframe;
 import com.rmrx.marketnexus.exchange.model.ExchangeType;
 import com.rmrx.marketnexus.marketdata.service.candle.CandleRepository;
+import com.rmrx.marketnexus.marketdata.service.config.CandleKafkaProperties;
 import com.rmrx.marketnexus.marketdata.service.config.IngestionProperties;
 import com.rmrx.marketnexus.marketdata.service.publish.CandlePublisher;
 import com.rmrx.marketnexus.marketdata.model.Candle;
@@ -22,7 +23,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Receives closed M1 candles from the exchange stream, stores them (idempotent upsert) and publishes them to Kafka.
+ * Receives closed M1 candles from the exchange stream, stores them (idempotent upsert) and publishes them to Kafka
+ * ({@code market-data.kafka.topics.m1-live}, input of the Flink candle aggregator).
  * <p>
  * Stream callbacks only enqueue; a worker pool ({@code market-data.ingestion.worker.*}) does the database and Kafka
  * work, so a slow or unavailable database never blocks the WebSocket thread. A candle is published only after it was
@@ -36,12 +38,15 @@ public class M1IngestionService implements ExchangeCandleListener, AutoCloseable
 
     private final CandleRepository repository;
     private final CandlePublisher publisher;
+    private final String topic;
     private final ExchangeType exchangeType;
     private final ExecutorService worker;
 
-    public M1IngestionService(CandleRepository repository, CandlePublisher publisher, IngestionProperties properties) {
+    public M1IngestionService(CandleRepository repository, CandlePublisher publisher, IngestionProperties properties,
+                              CandleKafkaProperties kafka) {
         this.repository = repository;
         this.publisher = publisher;
+        this.topic = kafka.topics().m1Live();
         this.exchangeType = properties.exchangeType();
         IngestionProperties.Worker pool = properties.worker();
         AtomicInteger threadNumber = new AtomicInteger();
@@ -81,7 +86,7 @@ public class M1IngestionService implements ExchangeCandleListener, AutoCloseable
             return;
         }
         if (changed) {
-            publisher.publish(candle);
+            publisher.publish(topic, candle);
         } else {
             log.debug("Unchanged {} {} {}, not republished", candle.symbol(), candle.timeframe(), candle.openTime());
         }

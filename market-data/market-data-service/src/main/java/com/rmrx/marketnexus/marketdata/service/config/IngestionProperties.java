@@ -16,10 +16,8 @@ import java.util.Objects;
  * @param websocketUrl exchange WebSocket endpoint
  * @param userAgent    User-Agent sent to the exchange
  * @param symbols      markets as {@code BASE/QUOTE}, e.g. {@code BTC/USDT}
- * @param topic        Kafka topic for live M1 candles
  * @param stream       where candles come from: {@code live} (exchange WebSocket) or {@code mock} (generated); default mock
  * @param mockStream   settings of the mock stream
- * @param publisher    where stored candles are published: {@code kafka} or {@code logging} (log only); default logging
  * @param worker       thread pool that stores and publishes candles
  */
 @ConfigurationProperties("market-data.ingestion")
@@ -29,10 +27,8 @@ public record IngestionProperties(
         URI websocketUrl,
         String userAgent,
         List<String> symbols,
-        String topic,
         StreamMode stream,
         MockStream mockStream,
-        PublisherType publisher,
         Worker worker) {
 
     public IngestionProperties {
@@ -40,18 +36,18 @@ public record IngestionProperties(
         Objects.requireNonNull(baseUrl, "market-data.ingestion.base-url");
         Objects.requireNonNull(websocketUrl, "market-data.ingestion.websocket-url");
         Objects.requireNonNull(userAgent, "market-data.ingestion.user-agent");
-        Objects.requireNonNull(topic, "market-data.ingestion.topic");
         symbols = symbols == null ? List.of() : List.copyOf(symbols);
         stream = stream == null ? StreamMode.MOCK : stream;
         mockStream = mockStream == null ? new MockStream(null, null) : mockStream;
-        publisher = publisher == null ? PublisherType.LOGGING : publisher;
         worker = worker == null ? new Worker(null, null, null, null) : worker;
     }
 
-    /** LIVE = exchange WebSocket, MOCK = endless generated candles, MOCK_GAPS = one-off history with gaps (reconciliation tests). */
-    public enum StreamMode { LIVE, MOCK, MOCK_GAPS }
-
-    public enum PublisherType { KAFKA, LOGGING }
+    /**
+     * LIVE = exchange WebSocket, MOCK = endless generated candles (simulated time, faster than real),
+     * MOCK_CLOCK = generated candles following the real clock (one closed candle per period, like the WebSocket),
+     * MOCK_GAPS = one-off history with gaps (reconciliation tests).
+     */
+    public enum StreamMode { LIVE, MOCK, MOCK_CLOCK, MOCK_GAPS }
 
     /**
      * Mock stream ({@code market-data.ingestion.mock-stream.*}).
