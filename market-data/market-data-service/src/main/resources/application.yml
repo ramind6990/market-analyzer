@@ -70,7 +70,7 @@ market-data:
     base-url: https://apiv2.nobitex.ir
     websocket-url: wss://ws.nobitex.ir/connection/websocket
     user-agent: TraderBot/rm-trading-0.0.1
-    stream: mock-gaps            # live = exchange WebSocket, mock = generated candles (fast, simulated time),
+    stream: mock-clock            # live = exchange WebSocket, mock = generated candles (fast, simulated time),
                                  # mock-clock = generated candles following the real clock (like the WebSocket),
                                  # mock-gaps = 100 candles/symbol from 8 h ago with 3-4 gaps (reconciliation test)
     mock-stream:

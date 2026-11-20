@@ -27,7 +27,7 @@ public final class CandleAggregationJob {
 
     public static void main(String[] args) throws Exception {
         ParameterTool params = ParameterTool.fromArgs(args);
-        String bootstrap = params.get("kafka.bootstrap-servers", "market-nexus-kafka:9092");
+        String bootstrap = params.get("kafka.bootstrap-servers", "localhost:9892");
         String groupId = params.get("kafka.group-id", "candle-aggregator");
         String outputTopic = params.get("topic.output", "candles-derived");
         long checkpointMs = params.getLong("checkpoint.interval-ms", 60_000);
