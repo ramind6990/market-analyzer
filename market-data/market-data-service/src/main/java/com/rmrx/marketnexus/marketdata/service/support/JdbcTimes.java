@@ -1,4 +1,4 @@
-package com.rmrx.marketnexus.marketdata.service.reconciliation.support;
+package com.rmrx.marketnexus.marketdata.service.support;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;

@@ -5,6 +5,7 @@ import com.rmrx.marketnexus.marketdata.model.Timeframe;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** Storage of {@link MarketSeries} rows. */
 public interface MarketSeriesRepository {
@@ -17,6 +18,9 @@ public interface MarketSeriesRepository {
      * @return symbol → watermark, in the order of {@code symbols}
      */
     Map<String, Instant> findWatermarks(String exchange, Timeframe timeframe, List<String> symbols, Instant initialWatermark);
+
+    /** Watermark of a series; empty if the series is unknown or was never checked. Read-only. */
+    Optional<Instant> findWatermark(String exchange, String symbol, Timeframe timeframe);
 
     /** Returns the series, creating it (never checked, no watermark) if it does not exist yet. */
     MarketSeries findOrCreate(String exchange, String symbol, Timeframe timeframe);

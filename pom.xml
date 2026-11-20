@@ -13,6 +13,7 @@
     <modules>
         <module>exchange</module>
         <module>market-data</module>
+        <module>market-analysis</module>
     </modules>
 
     <properties>

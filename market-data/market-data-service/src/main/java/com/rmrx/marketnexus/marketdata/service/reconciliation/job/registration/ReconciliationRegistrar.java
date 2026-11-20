@@ -1,12 +1,12 @@
 package com.rmrx.marketnexus.marketdata.service.reconciliation.job.registration;
 
-import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.Gap;
-import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.GapCheckResult;
-import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.GapDetectionService;
+import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.ReconciliationGap;
+import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.ReconciliationGapCheckResult;
+import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.ReconciliationGapDetectionService;
 import com.rmrx.marketnexus.marketdata.service.reconciliation.job.FetchWindow;
 import com.rmrx.marketnexus.marketdata.service.reconciliation.job.ReconciliationJobRepository;
 import com.rmrx.marketnexus.marketdata.service.reconciliation.series.MarketSeriesRepository;
-import com.rmrx.marketnexus.marketdata.service.reconciliation.support.CandleGrid;
+import com.rmrx.marketnexus.marketdata.service.support.CandleGrid;
 
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
 import com.rmrx.marketnexus.marketdata.service.config.IngestionProperties;
@@ -28,7 +28,8 @@ import java.util.Map;
  * Turns gaps into reconciliation jobs, per configured timeframe (M1, H1, ...). One run of a timeframe, for all symbols:
  * <ol>
  *   <li>load each series' watermark ({@code market_series});</li>
- *   <li>detect gaps after the watermarks (one query for all symbols);</li>
+ *   <li>find gaps after the watermarks from tracking (book + {@code candle_gap}, see
+ *       {@link ReconciliationGapDetectionService});</li>
  *   <li>per symbol, in one transaction: clip gaps to the timeframe's retention horizon (older parts are unrecoverable and only
  *       logged), move the watermark to just before the first recoverable gap, pack gaps into fetch windows, drop what
  *       open jobs already cover, and register the rest as PENDING jobs.</li>
@@ -41,10 +42,10 @@ public class ReconciliationRegistrar {
     private static final Logger log = LoggerFactory.getLogger(ReconciliationRegistrar.class);
 
     /** Outcome per symbol. */
-    public record Registration(String symbol, Instant watermark, List<Gap> unrecoverable, List<FetchWindow> registered) {
+    public record Registration(String symbol, Instant watermark, List<ReconciliationGap> unrecoverable, List<FetchWindow> registered) {
     }
 
-    private final GapDetectionService gapDetection;
+    private final ReconciliationGapDetectionService gapDetection;
     private final MarketSeriesRepository seriesRepository;
     private final ReconciliationJobRepository jobRepository;
     private final ReconciliationProperties reconciliation;
@@ -53,14 +54,14 @@ public class ReconciliationRegistrar {
     private final Clock clock;
 
     @Autowired
-    public ReconciliationRegistrar(GapDetectionService gapDetection, MarketSeriesRepository seriesRepository,
+    public ReconciliationRegistrar(ReconciliationGapDetectionService gapDetection, MarketSeriesRepository seriesRepository,
                                    ReconciliationJobRepository jobRepository, ReconciliationProperties reconciliation,
                                    IngestionProperties ingestion, PlatformTransactionManager transactionManager) {
         this(gapDetection, seriesRepository, jobRepository, reconciliation, ingestion,
                 new TransactionTemplate(transactionManager), Clock.systemUTC());
     }
 
-    ReconciliationRegistrar(GapDetectionService gapDetection, MarketSeriesRepository seriesRepository,
+    ReconciliationRegistrar(ReconciliationGapDetectionService gapDetection, MarketSeriesRepository seriesRepository,
                             ReconciliationJobRepository jobRepository, ReconciliationProperties reconciliation,
                             IngestionProperties ingestion, TransactionTemplate transaction, Clock clock) {
         this.gapDetection = gapDetection;
@@ -100,11 +101,11 @@ public class ReconciliationRegistrar {
                         timeframe)
                 .minus(timeframe.duration());
         Map<String, Instant> watermarks = seriesRepository.findWatermarks(exchange, timeframe, symbols, initialWatermark);
-        List<GapCheckResult> results = gapDetection.check(exchange, timeframe, watermarks);
+        List<ReconciliationGapCheckResult> results = gapDetection.check(exchange, timeframe, watermarks);
         Map<String, List<FetchWindow>> openJobs = jobRepository.findOpenWindows(exchange, timeframe, symbols);
 
         List<Registration> registrations = new ArrayList<>();
-        for (GapCheckResult result : results) {
+        for (ReconciliationGapCheckResult result : results) {
             Registration registration = transaction.execute(status -> registerSeries(exchange, timeframe, result,
                     watermarks.get(result.symbol()), openJobs.getOrDefault(result.symbol(), List.of()), now));
             registrations.add(registration);
@@ -113,7 +114,7 @@ public class ReconciliationRegistrar {
         return registrations;
     }
 
-    private Registration registerSeries(String exchange, Timeframe timeframe, GapCheckResult result,
+    private Registration registerSeries(String exchange, Timeframe timeframe, ReconciliationGapCheckResult result,
                                         Instant oldWatermark, List<FetchWindow> openWindows, Instant now) {
         if (result.checkedAfter() == null) {
             seriesRepository.updateWatermark(exchange, result.symbol(), timeframe, oldWatermark, now);
@@ -121,18 +122,18 @@ public class ReconciliationRegistrar {
         }
         Instant horizon = CandleGrid.horizon(now, reconciliation.effectiveRetention(timeframe), result.checkedAfter(),
                 timeframe);
-        GapPlanner.Clipped clipped = GapPlanner.clipToHorizon(result.gaps(), horizon, timeframe);
-        Instant watermark = GapPlanner.newWatermark(oldWatermark, result, clipped.recoverable());
-        List<FetchWindow> windows = GapPlanner.pack(clipped.recoverable(), reconciliation.maxWindowCandles(), timeframe);
-        List<FetchWindow> toRegister = GapPlanner.subtract(windows, openWindows, timeframe);
+        ReconciliationGapPlanner.Clipped clipped = ReconciliationGapPlanner.clipToHorizon(result.gaps(), horizon, timeframe);
+        Instant watermark = ReconciliationGapPlanner.newWatermark(oldWatermark, result, clipped.recoverable());
+        List<FetchWindow> windows = ReconciliationGapPlanner.pack(clipped.recoverable(), reconciliation.maxWindowCandles(), timeframe);
+        List<FetchWindow> toRegister = ReconciliationGapPlanner.subtract(windows, openWindows, timeframe);
 
         seriesRepository.updateWatermark(exchange, result.symbol(), timeframe, watermark, now);
         jobRepository.insertAll(exchange, result.symbol(), timeframe, toRegister,
-                window -> GapPlanner.priority(window, timeframe, now, reconciliation.recentWindow()));
+                window -> ReconciliationGapPlanner.priority(window, timeframe, now, reconciliation.recentWindow()));
         return new Registration(result.symbol(), watermark, clipped.unrecoverable(), toRegister);
     }
 
-    private static void log(String exchange, Timeframe timeframe, GapCheckResult result, Registration registration) {
+    private static void log(String exchange, Timeframe timeframe, ReconciliationGapCheckResult result, Registration registration) {
         String series = exchange + " " + result.symbol() + " " + timeframe;
         if (result.checkedAfter() == null) {
             log.info("Reconciliation {}: no candles stored", series);
@@ -141,7 +142,7 @@ public class ReconciliationRegistrar {
         log.info("Reconciliation {}: checked ({} .. {}], {} gap(s), watermark -> {}, {} job(s) registered",
                 series, result.checkedAfter(), result.upTo(), result.gaps().size(), registration.watermark(),
                 registration.registered().size());
-        for (Gap gap : registration.unrecoverable()) {
+        for (ReconciliationGap gap : registration.unrecoverable()) {
             log.warn("  unrecoverable at {} (older than retention): {} ({} candle(s))", timeframe, gap,
                     gap.missingCandles(timeframe));
         }

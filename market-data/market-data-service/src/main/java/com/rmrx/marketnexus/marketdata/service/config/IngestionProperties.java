@@ -18,7 +18,7 @@ import java.util.Objects;
  * @param symbols      markets as {@code BASE/QUOTE}, e.g. {@code BTC/USDT}
  * @param stream       where candles come from: {@code live} (exchange WebSocket) or {@code mock} (generated); default mock
  * @param mockStream   settings of the mock stream
- * @param worker       thread pool that stores and publishes candles
+ * @param worker       threads that store, track and publish candles
  */
 @ConfigurationProperties("market-data.ingestion")
 public record IngestionProperties(
@@ -39,7 +39,7 @@ public record IngestionProperties(
         symbols = symbols == null ? List.of() : List.copyOf(symbols);
         stream = stream == null ? StreamMode.MOCK : stream;
         mockStream = mockStream == null ? new MockStream(null, null) : mockStream;
-        worker = worker == null ? new Worker(null, null, null, null) : worker;
+        worker = worker == null ? new Worker(null, null) : worker;
     }
 
     /**
@@ -64,26 +64,27 @@ public record IngestionProperties(
     }
 
     /**
-     * Worker pool ({@code market-data.ingestion.worker.*}). Like any {@code ThreadPoolExecutor}, it runs
-     * {@code minPoolSize} threads and only adds threads (up to {@code maxPoolSize}) once the queue is full.
+     * Worker threads ({@code market-data.ingestion.worker.*}). Each symbol is always handled by the same thread, so the
+     * candles of one series are stored and tracked in arrival order; different symbols run in parallel.
      *
-     * @param minPoolSize   threads always kept (default 1)
-     * @param maxPoolSize   upper bound of threads (default 5)
-     * @param queueCapacity candles waiting to be stored/published; when the queue is full and all threads are busy,
-     *                      new candles are dropped and logged (default 10000)
-     * @param keepAlive     how long threads above {@code minPoolSize} stay idle before ending (default 60 s)
+     * @param threads       worker threads, each with its own queue (default 3)
+     * @param queueCapacity candles waiting to be stored/published, split evenly over the threads; when a thread's
+     *                      queue is full, new candles for its symbols are dropped and logged (default 10000)
      */
-    public record Worker(Integer minPoolSize, Integer maxPoolSize, Integer queueCapacity, Duration keepAlive) {
+    public record Worker(Integer threads, Integer queueCapacity) {
 
         public Worker {
-            minPoolSize = minPoolSize == null ? 1 : minPoolSize;
-            maxPoolSize = maxPoolSize == null ? 5 : maxPoolSize;
+            threads = threads == null ? 3 : threads;
             queueCapacity = queueCapacity == null ? 10_000 : queueCapacity;
-            keepAlive = keepAlive == null ? Duration.ofSeconds(60) : keepAlive;
-            if (minPoolSize < 1 || maxPoolSize < minPoolSize || queueCapacity < 1) {
-                throw new IllegalArgumentException("market-data.ingestion.worker: need 1 <= min-pool-size <= "
-                        + "max-pool-size and queue-capacity >= 1");
+            if (threads < 1 || queueCapacity < threads) {
+                throw new IllegalArgumentException("market-data.ingestion.worker: need threads >= 1 and "
+                        + "queue-capacity >= threads");
             }
+        }
+
+        /** Queue size of one thread. */
+        public int queueCapacityPerThread() {
+            return queueCapacity / threads;
         }
     }
 }

@@ -1,6 +1,6 @@
 package com.rmrx.marketnexus.marketdata.service.reconciliation.series;
 
-import com.rmrx.marketnexus.marketdata.service.reconciliation.support.JdbcTimes;
+import com.rmrx.marketnexus.marketdata.service.support.JdbcTimes;
 
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** {@link MarketSeriesRepository} on PostgreSQL with plain JDBC ({@link JdbcClient}). */
 @Repository
@@ -79,6 +80,17 @@ public class JdbcMarketSeriesRepository implements MarketSeriesRepository {
         Map<String, Instant> watermarks = new LinkedHashMap<>();
         symbols.forEach(symbol -> watermarks.put(symbol, stored.get(symbol)));
         return watermarks;
+    }
+
+    @Override
+    public Optional<Instant> findWatermark(String exchange, String symbol, Timeframe timeframe) {
+        return jdbc.sql(SELECT)
+                .param("exchange", exchange)
+                .param("symbol", symbol)
+                .param("timeframe", timeframe.name())
+                .query((rs, row) -> map(rs))
+                .optional()
+                .map(MarketSeries::verificationWatermark);
     }
 
     @Override

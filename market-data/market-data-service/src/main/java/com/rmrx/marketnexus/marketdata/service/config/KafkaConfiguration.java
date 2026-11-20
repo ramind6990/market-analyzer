@@ -19,7 +19,8 @@ public class KafkaConfiguration {
                 topic(topics.m1Live(), topics),
                 topic(topics.m1Reconciled(), topics),
                 topic(topics.h1Reconciled(), topics),
-                topic(topics.candlesDerived(), topics));
+                topic(topics.candlesDerived(), topics),
+                topic(topics.candleSeriesTracking(), topics));
     }
 
     private static NewTopic topic(String name, CandleKafkaProperties.Topics topics) {

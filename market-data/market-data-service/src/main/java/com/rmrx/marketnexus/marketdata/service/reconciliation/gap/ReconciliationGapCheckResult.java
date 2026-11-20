@@ -13,15 +13,15 @@ import java.util.Objects;
  * @param upTo         ...up to and including this open time ({@code null} when nothing was checked)
  * @param gaps         missing runs, oldest first; empty when the range is complete
  */
-public record GapCheckResult(
+public record ReconciliationGapCheckResult(
         String exchange,
         String symbol,
         Timeframe timeframe,
         Instant checkedAfter,
         Instant upTo,
-        List<Gap> gaps) {
+        List<ReconciliationGap> gaps) {
 
-    public GapCheckResult {
+    public ReconciliationGapCheckResult {
         Objects.requireNonNull(exchange, "exchange");
         Objects.requireNonNull(symbol, "symbol");
         Objects.requireNonNull(timeframe, "timeframe");

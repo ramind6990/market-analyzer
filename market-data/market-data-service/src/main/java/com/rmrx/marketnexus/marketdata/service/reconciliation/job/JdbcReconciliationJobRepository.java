@@ -1,6 +1,6 @@
 package com.rmrx.marketnexus.marketdata.service.reconciliation.job;
 
-import com.rmrx.marketnexus.marketdata.service.reconciliation.support.JdbcTimes;
+import com.rmrx.marketnexus.marketdata.service.support.JdbcTimes;
 
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
 import org.springframework.jdbc.core.simple.JdbcClient;

@@ -7,7 +7,7 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * A range of candles to fetch from the exchange (one reconciliation job). Unlike a {@link Gap}, a window may also contain
+ * A range of candles to fetch from the exchange (one reconciliation job). Unlike a {@link ReconciliationGap}, a window may also contain
  * candles that are already stored (several nearby gaps packed together).
  *
  * @param from open time of the first candle to fetch (inclusive)

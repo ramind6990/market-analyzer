@@ -12,9 +12,9 @@ import java.util.Objects;
  * @param from open time of the first missing candle (inclusive)
  * @param to   open time of the last missing candle (inclusive)
  */
-public record Gap(Instant from, Instant to) {
+public record ReconciliationGap(Instant from, Instant to) {
 
-    public Gap {
+    public ReconciliationGap {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");
         if (to.isBefore(from)) {

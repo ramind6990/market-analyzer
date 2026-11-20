@@ -1,11 +1,11 @@
 package com.rmrx.marketnexus.marketdata.service.reconciliation.job.execution;
 
-import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.Gap;
+import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.ReconciliationGap;
 import com.rmrx.marketnexus.marketdata.service.reconciliation.job.FetchWindow;
 import com.rmrx.marketnexus.marketdata.service.reconciliation.job.JobStatus;
 import com.rmrx.marketnexus.marketdata.service.reconciliation.job.ReconciliationJob;
 import com.rmrx.marketnexus.marketdata.service.reconciliation.job.ReconciliationJobRepository;
-import com.rmrx.marketnexus.marketdata.service.reconciliation.support.CandleGrid;
+import com.rmrx.marketnexus.marketdata.service.support.CandleGrid;
 
 import com.rmrx.marketnexus.marketdata.model.Candle;
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
@@ -13,6 +13,8 @@ import com.rmrx.marketnexus.marketdata.service.candle.CandleRepository;
 import com.rmrx.marketnexus.marketdata.service.candle.CandleSource;
 import com.rmrx.marketnexus.marketdata.service.candle.UpsertedCandle;
 import com.rmrx.marketnexus.marketdata.service.config.ReconciliationProperties;
+import com.rmrx.marketnexus.marketdata.service.tracking.tracker.SeriesKey;
+import com.rmrx.marketnexus.marketdata.service.tracking.tracker.SeriesTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,7 +40,9 @@ import java.util.Set;
  *   <li>One transaction: upsert (source POLL; inserted vs changed reported), cursor = chunk end + tf (the REQUESTED end,
  *       so missing candles at the end can't make the job loop), status DONE once past {@code windowTo}, else PENDING.</li>
  *   <li>Candles the exchange did not return are only logged (no "unavailable range" bookkeeping yet).</li>
- *   <li>Inserted/changed candles are handed to {@link ReconciledCandlePublisher} after the commit.</li>
+ *   <li>After the commit, all received candles are handed to {@link SeriesTracker} (already known ones are ignored
+ *       there; passing them all keeps the book right even if it missed one), then inserted/changed candles to
+ *       {@link ReconciledCandlePublisher}.</li>
  *   <li>On error: attempts + 1; PENDING again after a backoff, or FAILED after {@code max-attempts}; cursor unchanged.</li>
  * </ol>
  * The watermark is not touched here: the registrar's next gap check moves it over the repaired ranges, so jobs may run
@@ -51,7 +55,7 @@ public class ReconciliationJobExecutor {
 
     /** What one execution did. */
     public record ExecutionResult(long jobId, JobStatus status, FetchWindow chunk, int received,
-                                  List<UpsertedCandle> written, List<Gap> missing) {
+                                  List<UpsertedCandle> written, List<ReconciliationGap> missing) {
 
         public long inserted() {
             return written.stream().filter(UpsertedCandle::inserted).count();
@@ -66,6 +70,7 @@ public class ReconciliationJobExecutor {
     private final CandleRepository candleRepository;
     private final ReconciliationJobRepository jobRepository;
     private final ReconciledCandlePublisher publisher;
+    private final SeriesTracker tracker;
     private final ReconciliationProperties properties;
     private final TransactionTemplate transaction;
     private final Clock clock;
@@ -73,18 +78,21 @@ public class ReconciliationJobExecutor {
     @Autowired
     public ReconciliationJobExecutor(CandleFetcher fetcher, CandleRepository candleRepository,
                                      ReconciliationJobRepository jobRepository, ReconciledCandlePublisher publisher,
-                                     ReconciliationProperties properties, PlatformTransactionManager transactionManager) {
-        this(fetcher, candleRepository, jobRepository, publisher, properties,
+                                     SeriesTracker tracker, ReconciliationProperties properties,
+                                     PlatformTransactionManager transactionManager) {
+        this(fetcher, candleRepository, jobRepository, publisher, tracker, properties,
                 new TransactionTemplate(transactionManager), Clock.systemUTC());
     }
 
     ReconciliationJobExecutor(CandleFetcher fetcher, CandleRepository candleRepository,
                               ReconciliationJobRepository jobRepository, ReconciledCandlePublisher publisher,
-                              ReconciliationProperties properties, TransactionTemplate transaction, Clock clock) {
+                              SeriesTracker tracker, ReconciliationProperties properties, TransactionTemplate transaction,
+                              Clock clock) {
         this.fetcher = fetcher;
         this.candleRepository = candleRepository;
         this.jobRepository = jobRepository;
         this.publisher = publisher;
+        this.tracker = tracker;
         this.properties = properties;
         this.transaction = transaction;
         this.clock = clock;
@@ -133,11 +141,13 @@ public class ReconciliationJobExecutor {
             });
 
             // 4. What the exchange did not return (only logged for now).
-            List<Gap> missing = missingRanges(chunk, received, timeframe);
+            List<ReconciliationGap> missing = missingRanges(chunk, received, timeframe);
             ExecutionResult result = new ExecutionResult(job.id(), status, chunk, received.size(), written, missing);
             log(job, result, timeframe);
 
-            // 5. Hand the reconciled candles on.
+            // 5. Hand the reconciled candles on: tracking first, then the aggregator.
+            tracker.onClosedCandles(new SeriesKey(job.exchange(), job.symbol(), timeframe),
+                    received.stream().map(Candle::openTime).toList());
             publisher.publish(job, written);
             return result;
         } catch (RuntimeException e) {
@@ -160,16 +170,16 @@ public class ReconciliationJobExecutor {
     }
 
     /** Open times in the chunk that the exchange did not return, as ranges. */
-    static List<Gap> missingRanges(FetchWindow chunk, List<Candle> received, Timeframe timeframe) {
+    static List<ReconciliationGap> missingRanges(FetchWindow chunk, List<Candle> received, Timeframe timeframe) {
         Set<Instant> present = new HashSet<>();
         received.forEach(candle -> present.add(candle.openTime()));
-        List<Gap> missing = new ArrayList<>();
+        List<ReconciliationGap> missing = new ArrayList<>();
         Instant runStart = null;
         Instant previous = null;
         for (Instant t = chunk.from(); !t.isAfter(chunk.to()); t = t.plus(timeframe.duration())) {
             if (present.contains(t)) {
                 if (runStart != null) {
-                    missing.add(new Gap(runStart, previous));
+                    missing.add(new ReconciliationGap(runStart, previous));
                     runStart = null;
                 }
             } else if (runStart == null) {
@@ -178,7 +188,7 @@ public class ReconciliationJobExecutor {
             previous = t;
         }
         if (runStart != null) {
-            missing.add(new Gap(runStart, previous));
+            missing.add(new ReconciliationGap(runStart, previous));
         }
         return missing;
     }

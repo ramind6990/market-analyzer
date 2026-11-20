@@ -1,7 +1,7 @@
 package com.rmrx.marketnexus.marketdata.service.reconciliation.job.registration;
 
-import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.Gap;
-import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.GapCheckResult;
+import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.ReconciliationGap;
+import com.rmrx.marketnexus.marketdata.service.reconciliation.gap.ReconciliationGapCheckResult;
 import com.rmrx.marketnexus.marketdata.service.reconciliation.job.FetchWindow;
 
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
@@ -21,26 +21,26 @@ import java.util.List;
  *   <li>Subtract windows already covered by open jobs.</li>
  * </ol>
  */
-final class GapPlanner {
+final class ReconciliationGapPlanner {
 
-    private GapPlanner() {
+    private ReconciliationGapPlanner() {
     }
 
     /** Gaps split at the horizon. */
-    record Clipped(List<Gap> recoverable, List<Gap> unrecoverable) {
+    record Clipped(List<ReconciliationGap> recoverable, List<ReconciliationGap> unrecoverable) {
     }
 
 
     /** Splits gaps into the parts at/after the horizon (recoverable) and before it (unrecoverable). */
-    static Clipped clipToHorizon(List<Gap> gaps, Instant horizon, Timeframe timeframe) {
-        List<Gap> recoverable = new ArrayList<>();
-        List<Gap> unrecoverable = new ArrayList<>();
-        for (Gap gap : gaps) {
+    static Clipped clipToHorizon(List<ReconciliationGap> gaps, Instant horizon, Timeframe timeframe) {
+        List<ReconciliationGap> recoverable = new ArrayList<>();
+        List<ReconciliationGap> unrecoverable = new ArrayList<>();
+        for (ReconciliationGap gap : gaps) {
             if (gap.to().isBefore(horizon)) {
                 unrecoverable.add(gap);
             } else if (gap.from().isBefore(horizon)) {
-                unrecoverable.add(new Gap(gap.from(), horizon.minus(timeframe.duration())));
-                recoverable.add(new Gap(horizon, gap.to()));
+                unrecoverable.add(new ReconciliationGap(gap.from(), horizon.minus(timeframe.duration())));
+                recoverable.add(new ReconciliationGap(horizon, gap.to()));
             } else {
                 recoverable.add(gap);
             }
@@ -54,7 +54,7 @@ final class GapPlanner {
      *
      * @return the new watermark, or {@code oldWatermark} if nothing was checked
      */
-    static Instant newWatermark(Instant oldWatermark, GapCheckResult result, List<Gap> recoverable) {
+    static Instant newWatermark(Instant oldWatermark, ReconciliationGapCheckResult result, List<ReconciliationGap> recoverable) {
         if (result.checkedAfter() == null) {
             return oldWatermark;
         }
@@ -72,11 +72,11 @@ final class GapPlanner {
      * this gap's end) stays within {@code maxCandles}. One REST call returns every candle in a window, so the span
      * counts, not just the missing candles. A single gap larger than the limit stays one window.
      */
-    static List<FetchWindow> pack(List<Gap> gaps, int maxCandles, Timeframe timeframe) {
+    static List<FetchWindow> pack(List<ReconciliationGap> gaps, int maxCandles, Timeframe timeframe) {
         List<FetchWindow> windows = new ArrayList<>();
         Instant from = null;
         Instant to = null;
-        for (Gap gap : gaps) {
+        for (ReconciliationGap gap : gaps) {
             if (from == null) {
                 from = gap.from();
                 to = gap.to();

@@ -3,6 +3,8 @@ package com.rmrx.marketnexus.marketdata.service.ingestion;
 import com.rmrx.marketnexus.marketdata.service.candle.CandleRepository;
 import com.rmrx.marketnexus.marketdata.service.candle.DerivedCandle;
 import com.rmrx.marketnexus.marketdata.service.config.CandleKafkaProperties;
+import com.rmrx.marketnexus.marketdata.service.tracking.tracker.SeriesKey;
+import com.rmrx.marketnexus.marketdata.service.tracking.tracker.SeriesTracker;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,11 +12,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Stores the derived candles (M5..D1) the Flink aggregator publishes on {@code market-data.kafka.topics.candles-derived}.
@@ -25,7 +27,7 @@ import java.util.stream.Collectors;
  * written, and a partial update never overwrites a closed candle. Offsets are committed after the batch is stored,
  * so a crash loses nothing (the upsert is idempotent on redelivery).
  * <p>
- * Final candles that changed the stored row are handed to {@link ClosedCandleListener}, in open-time order.
+ * Final candles that changed the stored row are handed to {@link SeriesTracker} after the commit, per series.
  * Active in kafka mode only.
  */
 @Service
@@ -35,11 +37,11 @@ public class DerivedCandleIngestionService {
     private static final Logger log = LoggerFactory.getLogger(DerivedCandleIngestionService.class);
 
     private final CandleRepository repository;
-    private final ClosedCandleListener closedListener;
+    private final SeriesTracker tracker;
 
-    public DerivedCandleIngestionService(CandleRepository repository, ClosedCandleListener closedListener) {
+    public DerivedCandleIngestionService(CandleRepository repository, SeriesTracker tracker) {
         this.repository = repository;
-        this.closedListener = closedListener;
+        this.tracker = tracker;
     }
 
     @KafkaListener(topics = "${market-data.kafka.topics.candles-derived:candles-derived}", batch = "true")
@@ -69,12 +71,14 @@ public class DerivedCandleIngestionService {
         List<DerivedCandle> written = repository.upsertDerivedAll(candles);
         log.debug("Derived batch: {} message(s), {} row(s) written", messages.size(), written.size());
 
-        Map<DerivedCandle, Boolean> reconciled = messages.stream().collect(Collectors.toMap(
-                message -> new DerivedCandle(message.candle(), message.closed()), DerivedCandleMessage::reconciled,
-                (first, last) -> last));
+        Map<SeriesKey, List<Instant>> closedBySeries = new LinkedHashMap<>();
         written.stream()
                 .filter(DerivedCandle::closed)
-                .sorted(Comparator.comparing(candle -> candle.candle().openTime()))
-                .forEach(candle -> closedListener.onClosed(candle.candle(), reconciled.getOrDefault(candle, false)));
+                .map(DerivedCandle::candle)
+                .forEach(candle -> closedBySeries
+                        .computeIfAbsent(new SeriesKey(candle.exchange(), candle.symbol(), candle.timeframe()),
+                                key -> new ArrayList<>())
+                        .add(candle.openTime()));
+        closedBySeries.forEach(tracker::onClosedCandles);
     }
 }

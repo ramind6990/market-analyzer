@@ -44,6 +44,7 @@ market-data:
       m1-reconciled: m1-reconciled  # M1 written by reconciliation (-> Flink)
       h1-reconciled: h1-reconciled  # H1 written by reconciliation (-> Flink H1 stage)
       candles-derived: candles-derived  # progressive M5..D1 (Flink -> this service)
+      candle-series-tracking: candle-series-tracking  # complete-history changes per series (-> analysis)
       partitions: 3               # for topics created by the service
       replicas: 1
   reconciliation:
@@ -65,6 +66,10 @@ market-data:
       H1:
         retention: 30d            # first-run lookback (deeper H1 history comes from the separate script)
         grid-offset: 30m          # Nobitex hours start at :30 UTC
+  tracking:
+    rebuild-candles: 1000         # startup rebuild lookback per series, in candles of its timeframe
+                                  # (further back if an unfilled gap is older)
+    # timeframes: [M1, M5, H1]    # tracked timeframes per symbol; default all
   ingestion:
     exchange-type: CRYPTO_NOBITEX
     base-url: https://apiv2.nobitex.ir
@@ -77,10 +82,8 @@ market-data:
       emit-interval: 1s          # one simulated minute per second and symbol
       seed: 42
     worker:
-      min-pool-size: 1
-      max-pool-size: 5
-      queue-capacity: 10000
-      keep-alive: 60s
+      threads: 3                 # one symbol always on the same thread (candles of a series stay in order)
+      queue-capacity: 10000      # split evenly over the threads
     symbols:
       - BTC/USDT
       - ETH/USDT

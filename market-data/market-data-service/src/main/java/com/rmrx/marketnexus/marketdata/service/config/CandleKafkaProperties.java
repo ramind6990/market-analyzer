@@ -18,29 +18,32 @@ public record CandleKafkaProperties(Mode mode, Topics topics) {
 
     public CandleKafkaProperties {
         mode = mode == null ? Mode.LOGGING : mode;
-        topics = topics == null ? new Topics(null, null, null, null, null, null) : topics;
+        topics = topics == null ? new Topics(null, null, null, null, null, null, null) : topics;
     }
 
     public enum Mode { KAFKA, LOGGING }
 
     /**
-     * Topics between this service and the Flink candle aggregator ({@code market-data.kafka.topics.*}).
+     * Topics between this service and the Flink candle aggregator (and analysis) ({@code market-data.kafka.topics.*}).
      *
      * @param m1Live         live M1 (ingestion → Flink); default {@code m1-live}
      * @param m1Reconciled   M1 written by reconciliation (→ Flink); default {@code m1-reconciled}
      * @param h1Reconciled   H1 written by reconciliation (→ Flink H1 stage); default {@code h1-reconciled}
      * @param candlesDerived progressive M5..D1 from Flink (→ this service); default {@code candles-derived}
+     * @param candleSeriesTracking changes of a series' complete history (this service → analysis);
+     *                             default {@code candle-series-tracking}
      * @param partitions     partitions of topics created by the service (default 3)
      * @param replicas       replication factor of topics created by the service (default 1)
      */
     public record Topics(String m1Live, String m1Reconciled, String h1Reconciled, String candlesDerived,
-                         Integer partitions, Short replicas) {
+                         String candleSeriesTracking, Integer partitions, Short replicas) {
 
         public Topics {
             m1Live = m1Live == null ? "m1-live" : m1Live;
             m1Reconciled = m1Reconciled == null ? "m1-reconciled" : m1Reconciled;
             h1Reconciled = h1Reconciled == null ? "h1-reconciled" : h1Reconciled;
             candlesDerived = candlesDerived == null ? "candles-derived" : candlesDerived;
+            candleSeriesTracking = candleSeriesTracking == null ? "candle-series-tracking" : candleSeriesTracking;
             partitions = partitions == null ? 3 : partitions;
             replicas = replicas == null ? (short) 1 : replicas;
         }
