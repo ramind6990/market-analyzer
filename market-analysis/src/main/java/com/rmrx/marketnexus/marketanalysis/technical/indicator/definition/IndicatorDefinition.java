@@ -24,6 +24,15 @@ public interface IndicatorDefinition {
 
     String description();
 
+    /**
+     * Formula version. Bump it when the computation of an existing type changes: its stored name becomes
+     * {@code TYPE@version(...)}, so the layout changes, the series are recomputed into new rows and the values of the
+     * old version stay readable under the old layout.
+     */
+    default int version() {
+        return 1;
+    }
+
     IndicatorFamily family();
 
     Set<ComputationModel> models();

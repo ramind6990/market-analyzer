@@ -9,7 +9,8 @@ import java.util.Objects;
  *
  * @param openTime      open time of the bar
  * @param layoutVersion version of the layout the values follow
- * @param values        one value per layout entry
+ * @param values        one value per layout entry: {@code values[i]} belongs to {@code layout.entries().get(i)};
+ *                      find one with {@code layout.indexOf(outputRef)}
  */
 public record IndicatorRow(Instant openTime, long layoutVersion, double[] values) {
 

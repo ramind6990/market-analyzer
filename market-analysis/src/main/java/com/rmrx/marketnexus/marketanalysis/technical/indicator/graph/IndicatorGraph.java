@@ -32,6 +32,7 @@ public final class IndicatorGraph {
         this.roots = List.copyOf(roots);
         this.canonicalizer = canonicalizer;
         List<OutputRef> entries = new ArrayList<>();
+        List<String> names = new ArrayList<>();
         int lookback = 0;
         int warmup = 0;
         for (IndicatorNode node : orderedNodes) {
@@ -42,12 +43,14 @@ public final class IndicatorGraph {
             }
             nodes.put(node.spec(), node);
             for (OutputDef output : node.definition().outputs()) {
-                entries.add(node.spec().output(output.name()));
+                OutputRef entry = node.spec().output(output.name());
+                entries.add(entry);
+                names.add(IndicatorLayout.name(entry, node.definition().version()));
             }
             lookback = Math.max(lookback, node.lookback());
             warmup = Math.max(warmup, node.warmup());
         }
-        this.layout = new IndicatorLayout(entries);
+        this.layout = new IndicatorLayout(entries, names);
         this.maxLookback = lookback;
         this.maxWarmup = warmup;
     }
