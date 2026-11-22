@@ -7,4 +7,3 @@ target/
 # Local infrastructure
 docker-data/
 .docker-data/
-docs/

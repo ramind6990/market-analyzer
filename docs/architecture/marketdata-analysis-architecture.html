@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Market Data &amp; Analysis Architecture</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+  :root { --blue:#1f5a8b; --ink:#222; --muted:#5b6470; --line:#d5dbe3; --soft:#eef2f6; --code:#f5f7fa; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", "DejaVu Sans", Arial, sans-serif; color: var(--ink); font-size: 10.2pt; line-height: 1.45; margin: 0; background: #fff; }
+  h1 { color: var(--blue); font-size: 24pt; margin: 0 0 4pt; }
+  h2 { color: var(--blue); font-size: 15pt; margin: 20pt 0 6pt; border-bottom: 1.5pt solid var(--line); padding-bottom: 3pt; page-break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 12pt 0 4pt; page-break-after: avoid; }
+  p { margin: 4pt 0 6pt; }
+  ul, ol { margin: 3pt 0 6pt 16pt; padding: 0; }
+  li { margin: 1.5pt 0; }
+  .subtitle { color: var(--muted); font-size: 12pt; margin-bottom: 8pt; }
+  .meta { color: var(--muted); font-size: 9pt; margin-bottom: 12pt; }
+  .box { background: var(--soft); border-left: 3pt solid var(--blue); padding: 7pt 10pt; margin: 8pt 0; page-break-inside: avoid; }
+  .box p { margin: 2pt 0; }
+  .term { background: #fff8e6; border-left: 3pt solid #d39b1a; padding: 7pt 10pt; margin: 8pt 0; page-break-inside: avoid; }
+  table { border-collapse: collapse; width: 100%; margin: 6pt 0 8pt; font-size: 9.2pt; page-break-inside: avoid; }
+  th, td { border: 0.75pt solid var(--line); padding: 3.5pt 5pt; text-align: left; vertical-align: top; }
+  th { background: var(--soft); }
+  pre { background: var(--code); border: 0.75pt solid var(--line); padding: 6pt 8pt; font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 8.3pt; line-height: 1.35; white-space: pre-wrap; word-break: break-word; margin: 5pt 0 8pt; page-break-inside: avoid; }
+  code { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 8.8pt; background: var(--code); padding: 0 2pt; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .small { font-size: 8.8pt; color: var(--muted); }
+  .cover { margin-top: 30mm; }
+  .pb { page-break-before: always; }
+  .toc ol { columns: 2; column-gap: 20pt; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Market Data &amp; Analysis Architecture</h1>
+  <div class="subtitle">marketdata · analysis · strategy: data flow, scheduling, triggers and communication (REST-only, v1)</div>
+  <div class="meta">15 November 2026 · Conclusions from the design discussion · Builds on the "Crypto Trading System — architecture plan (v1 core)"</div>
+  <div class="box">
+    <p><b>Scope.</b> How market data is collected from the exchange (Nobitex, REST API), stored in PostgreSQL, and handed to the
+    analysis and strategy modules; which component triggers what; how backfilling, live updates and derived timeframes are scheduled.</p>
+    <p><b>Out of scope for now.</b> WebSocket (later: live price feed only), Kafka/Flink, agents (only the hooks they will need), order execution.</p>
+  </div>
+  <div class="toc">
+    <h3>Contents</h3>
+    <ol>
+      <li>Big picture</li>
+      <li>Guiding conclusions</li>
+      <li>Data decisions</li>
+      <li>Storage model</li>
+      <li>Scheduling: reconciler, jobs, worker</li>
+      <li>Series lifecycle and statuses</li>
+      <li>Consistency rules</li>
+      <li>Subscriptions and events</li>
+      <li>Analysis and strategy</li>
+      <li>Sample flows</li>
+      <li>Agents (future hooks)</li>
+      <li>Deferred and open points</li>
+    </ol>
+  </div>
+</div>
+
+<h2 class="pb">1. Big picture</h2>
+<pre>
+                ┌──────────────────────────────────────────────┐
+  Nobitex REST  │ exchange module                              │  generic contract: ExchangeClient.getOhlc(...)
+  ─────────────►│  (NobitexExchangeClient, throttled, retries) │  ExchangeOhlcRequest / ExchangeOhlcResponse
+                └──────────────────────┬───────────────────────┘
+                                       │ called only by marketdata
+                ┌──────────────────────▼───────────────────────┐
+                │ marketdata module                            │
+                │  ticker (@Scheduled) ─► market_job queue      │
+                │  reconciler ──────────► market_job queue      │
+                │  worker ─► exchange ─► candle (PostgreSQL)    │
+                │  derive timeframes, watermark, statuses       │
+                │  query API  +  event publisher (port)         │
+                └───────┬───────────────────────▲──────────────┘
+     SeriesStatusChanged│ CandlesClosed         │ subscribe(...) / read history
+                ┌───────▼───────────────────────┴──────────────┐
+                │ analysis module (stateless)                  │
+                │  read last ~500 candles ─► indicators (ta4j)  │
+                │  store feature snapshots (own table)          │
+                └───────────────────────┬──────────────────────┘
+                                        │ latest FRESH candle only
+                ┌───────────────────────▼──────────────────────┐
+                │ strategy module ─► proposals ─► (decision, risk, execution later)
+                └──────────────────────────────────────────────┘
+</pre>
+<table>
+  <tr><th>Module</th><th>Owns</th><th>Triggered by</th><th>Knows about</th></tr>
+  <tr><td>exchange</td><td>Exchange API clients, generic exchange contract</td><td>calls from marketdata</td><td>nothing above it</td></tr>
+  <tr><td>marketdata</td><td>candles, series state, jobs, subscriptions; the <b>only scheduler</b></td><td>its ticker, reconciler, subscriptions</td><td>exchange module; <b>not</b> analysis/strategy</td></tr>
+  <tr><td>analysis</td><td>indicator values (feature snapshots)</td><td>marketdata events (no scheduler)</td><td>marketdata contract</td></tr>
+  <tr><td>strategy</td><td>strategy definitions, proposals</td><td>analysis output for a fresh candle</td><td>analysis contract</td></tr>
+</table>
+
+<h2>2. Guiding conclusions</h2>
+<ul>
+  <li><b>PostgreSQL is the source of truth</b> for candles. Events are a "wake-up call that also carries the data", never the truth.</li>
+  <li><b>One scheduler</b>, in marketdata. Analysis and strategy are purely event-driven; they never poll.</li>
+  <li><b>REST only</b> for storing candles. REST candles are final; WebSocket snapshots can miss the last seconds of a candle (observed in a test).
+      WebSocket comes back later as a <i>live price feed</i> (stops, paper fills), not as a candle source.</li>
+  <li><b>No Kafka/Flink now.</b> Volume is a few thousand candles per day. Events go through a publisher interface: in-process now,
+      Kafka with a transactional outbox later, without changing producers or consumers.</li>
+  <li><b>Closed candles only</b> are stored and published. Decisions are made only on closed candles.</li>
+  <li><b>Library modules never read env/config files</b>; callers pass config objects in (later: Spring Boot modules).</li>
+  <li><b>Collect broadly, derive on demand:</b> collection is per coin and continuous; timeframes are cheap derived views created when someone subscribes.</li>
+</ul>
+
+<h2>3. Data decisions</h2>
+<h3>3.1 Facts about Nobitex (docs + live tests)</h3>
+<table>
+  <tr><th>Fact</th><th>Consequence</th></tr>
+  <tr><td>OHLC endpoint <code>GET /market/udf/history</code>, max 500 candles per call, documented limit 60 requests/min (a 75-request burst was not throttled in a test)</td><td>We still respect the documented limit: one throttled client per exchange (1.1 s spacing) and honour <code>backOff</code> on HTTP 429</td></tr>
+  <tr><td>Resolutions 1/5/15/30 min are only kept for <b>7 days</b>; H1 history goes back to ~Nov 2018</td><td>Minute-level data must be <b>collected continuously</b>; it cannot be backfilled later</td></tr>
+  <tr><td>The newest candle returned is still forming</td><td>Drop it; store only closed candles</td></tr>
+  <tr><td>Hours open at <b>HH:30 UTC</b>, days at <b>20:30 UTC</b> (Tehran-aligned)</td><td>Derived timeframes use the exchange's own boundaries, so native and derived history join seamlessly</td></tr>
+  <tr><td>Minutes without trades are returned as filler candles: o=h=l=c=previous close, v=0</td><td>Aggregation must skip v=0 candles (see 3.3)</td></tr>
+  <tr><td>One symbol per OHLC request</td><td>Cost scales with the number of coins; batch per call (500 candles)</td></tr>
+</table>
+
+<h3>3.2 Resolutions: what is collected vs derived</h3>
+<table>
+  <tr><th>Period</th><th>Stored resolution</th><th>How</th></tr>
+  <tr><td>2018 → 7 days ago</td><td>native <b>H1</b></td><td>one-time deep backfill (~140 calls per coin)</td></tr>
+  <tr><td>last 7 days → ongoing</td><td><b>M5</b> (collected base resolution)</td><td>7-day backfill (~4 calls/coin), then continuous batched collection</td></tr>
+  <tr><td>everything else (M15, M30, H1 recent, H4, D1, W1 …)</td><td>derived</td><td>aggregated locally from the finest stored data</td></tr>
+</table>
+<p><b>Why M5 as base:</b> M1 is not needed by any planned strategy (fees and spread dominate at that scale); M5 gives 12 slices per hour
+for realistic backtests (stop vs. take-profit order inside an H1 candle) and still derives M15/M30. Coarser later is always possible,
+finer never (7-day limit). The base resolution is per-exchange config, not hard-coded.</p>
+
+<h3>3.3 Aggregation rule (verified against Nobitex)</h3>
+<p>Test (BTCUSDT, 7 complete hours): aggregating M1 while <b>skipping v=0 filler candles</b> reproduced Nobitex's native H1 exactly (OHLCV).
+Naive aggregation got the open wrong. Aggregating M5 gave exact OHLC; volume differed by ~1e-8 (M5 volume is rounded to 8 decimals).</p>
+<pre><code>derive(bucket):                         // e.g. one H1 bucket from its M5 candles
+  traded = candles in bucket with volume &gt; 0
+  if traded is empty:
+      return flat candle (o=h=l=c = previous close, v = 0)   // same as the exchange
+  open   = traded.first.open
+  high   = max(traded.high)
+  low    = min(traded.low)
+  close  = traded.last.close
+  volume = sum(all candles.volume)
+  // compare with native candles using a small volume tolerance, not exact equality</code></pre>
+
+<h3>3.4 Collected universe vs subscribed series</h3>
+<ul>
+  <li><b>Collected universe</b> (marketdata config): ideally all USDT pairs. Passive collection needs ~1 call per coin per day
+      (500 × M5 ≈ 41 h), plus a one-time deep H1 backfill. Cost is negligible; the value is that history exists from day one.</li>
+  <li><b>Subscribed series</b> (demand from analysis): coin + timeframe pairs that are maintained live, derived and published.</li>
+  <li>Fetch frequency is driven by the <b>shortest subscribed timeframe</b>, not by the stored resolution.</li>
+  <li>Prefer one quote currency (USDT): prices, P&amp;L and portfolio in one unit; IRT pairs mix coin moves with the rial's exchange rate.</li>
+</ul>
+
+<h2 class="pb">4. Storage model</h2>
+<p>All tables belong to marketdata (analysis owns its own tables). Schema changes via Flyway.</p>
+<pre><code>CREATE TABLE candle (
+    exchange     text        NOT NULL,
+    symbol       text        NOT NULL,          -- e.g. 'BTC/USDT'
+    timeframe    text        NOT NULL,          -- 'M5', 'H1', 'H4', ...
+    open_time    timestamptz NOT NULL,
+    open         numeric     NOT NULL,
+    high         numeric     NOT NULL,
+    low          numeric     NOT NULL,
+    close        numeric     NOT NULL,
+    volume       numeric     NOT NULL,
+    source       text        NOT NULL,          -- 'REST' (native) | 'DERIVED'
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (exchange, symbol, timeframe, open_time)
+);
+
+CREATE TABLE market_series (                    -- facts ABOUT the data
+    exchange          text NOT NULL,
+    symbol            text NOT NULL,
+    timeframe         text NOT NULL,
+    kind              text NOT NULL,            -- COLLECTED | DERIVED
+    status            text NOT NULL,            -- see section 6
+    oldest_open_time  timestamptz,
+    newest_open_time  timestamptz,
+    published_until   timestamptz,              -- watermark: gap-free AND announced up to here
+    history_complete  boolean NOT NULL DEFAULT false,   -- exchange answered no_data going back
+    active            boolean NOT NULL DEFAULT true,
+    updated_at        timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (exchange, symbol, timeframe)
+);
+
+CREATE TABLE market_job (                       -- work still to do ("scheduled" = a row here)
+    id           bigserial PRIMARY KEY,
+    type         text NOT NULL,                 -- FETCH_LATEST | DERIVE | BACKFILL_HISTORY | BACKFILL_RECENT | INITIAL_PAGE
+    exchange     text NOT NULL,
+    symbol       text NOT NULL,
+    timeframe    text NOT NULL,
+    range_from   timestamptz,
+    range_to     timestamptz,
+    cursor       timestamptz,                   -- resume point
+    priority     text NOT NULL,                 -- LIVE &gt; DERIVE &gt; BACKFILL
+    status       text NOT NULL,                 -- PENDING | RUNNING | DONE | FAILED
+    attempts     int  NOT NULL DEFAULT 0,
+    next_run_at  timestamptz NOT NULL DEFAULT now(),
+    last_error   text,
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+-- at most one OPEN job of a type per series -&gt; scheduling twice is harmless
+CREATE UNIQUE INDEX one_open_job ON market_job (type, exchange, symbol, timeframe)
+    WHERE status IN ('PENDING', 'RUNNING');
+
+CREATE TABLE series_subscription (              -- who needs which series (durable)
+    subscriber_id  text NOT NULL,               -- e.g. 'analysis'
+    exchange       text NOT NULL,
+    symbol         text NOT NULL,
+    timeframe      text NOT NULL,
+    min_history    int  NOT NULL,               -- candles needed for warm-up
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (subscriber_id, exchange, symbol, timeframe)
+);</code></pre>
+
+<h3>Idempotent upsert</h3>
+<p>Re-fetching never duplicates; identical data is a no-op. If an already-published candle ever changes, it is <b>detected and logged</b>
+(correction events are deferred until they actually occur).</p>
+<pre><code>INSERT INTO candle AS c (exchange, symbol, timeframe, open_time, open, high, low, close, volume, source)
+VALUES (...), (...)                                   -- batch de-duplicated by open_time in Java first
+ON CONFLICT (exchange, symbol, timeframe, open_time) DO UPDATE
+SET open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+    close = EXCLUDED.close, volume = EXCLUDED.volume, source = EXCLUDED.source, updated_at = now()
+WHERE (c.open, c.high, c.low, c.close, c.volume)
+      IS DISTINCT FROM (EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume)
+RETURNING c.open_time, (old.open_time IS NULL) AS inserted;   -- PostgreSQL 18: OLD/NEW in RETURNING</code></pre>
+
+<h2 class="pb">5. Scheduling: reconciler, jobs, worker</h2>
+<div class="term">
+  <p><b>Terminology.</b></p>
+  <p><b>Scheduling</b> = writing down work as a row in <code>market_job</code>. It is <i>not</i> a timer. Rows survive restarts and can be inspected with SQL.</p>
+  <p><b>Reconciler</b> = a component that compares the <i>desired state</i> (collected universe + subscriptions) with the <i>actual state</i>
+  (<code>market_series</code>) and schedules jobs for the difference. The term comes from control loops such as Kubernetes controllers:
+  "observe → diff → act", repeated safely. It fetches nothing itself and is idempotent: running it twice creates no duplicate work.</p>
+  <p><b>Ticker</b> = the only timer (Spring <code>@Scheduled</code>, every minute). It decides <i>when</i> live work exists.</p>
+  <p><b>Worker</b> = the loop that executes jobs. The queue decides <i>in what order</i>; the throttled exchange client decides <i>how fast</i>.</p>
+</div>
+
+<h3>5.1 Job types</h3>
+<table>
+  <tr><th>Job</th><th>Priority</th><th>Created by</th><th>Does</th></tr>
+  <tr><td><b>FETCH_LATEST</b></td><td>LIVE (highest)</td><td>ticker, when a candle is due</td><td>fetch from newest stored candle → now; store; derive; advance watermark; publish</td></tr>
+  <tr><td><b>INITIAL_PAGE</b></td><td>LIVE</td><td>reconciler, new series</td><td>fetch the newest page (500) to establish the head and give a warm-up window</td></tr>
+  <tr><td><b>DERIVE</b></td><td>DERIVE</td><td>reconciler / subscription</td><td>build a derived timeframe over a range from stored base data (no API calls)</td></tr>
+  <tr><td><b>BACKFILL_RECENT</b></td><td>BACKFILL</td><td>reconciler, new coin or gap &lt; 7 days</td><td>fetch base-resolution (M5) candles of the last 7 days</td></tr>
+  <tr><td><b>BACKFILL_HISTORY</b></td><td>BACKFILL (lowest)</td><td>reconciler, history not complete</td><td>walk back from the oldest stored H1 to the start of the exchange's history</td></tr>
+</table>
+
+<h3>5.2 Reconciler (startup, config reload, new subscription)</h3>
+<pre><code>reconcile():
+  for coin in collectedUniverse:                          // desired: collection
+      ensureSeries(coin, BASE, COLLECTED)                 // e.g. M5
+      ensureSeries(coin, H1,   COLLECTED)                 // deep history
+      if series has no head                    -&gt; schedule(INITIAL_PAGE)
+      if base gap within last 7 days           -&gt; schedule(BACKFILL_RECENT)
+      if !H1.history_complete                  -&gt; schedule(BACKFILL_HISTORY, cursor = H1.oldest)
+
+  for sub in subscriptions:                               // desired: demand
+      s = ensureSeries(sub.coin, sub.timeframe, DERIVED)
+      if s does not cover its source range     -&gt; schedule(DERIVE)
+      updateStatus(s)                                     // WARMING_UP / LIVE / STALE (section 6)
+
+  for s in activeSeries not desired anymore:
+      s.active = false                                    // stop work, keep data
+
+schedule(type, ...):  INSERT INTO market_job ... ON CONFLICT DO NOTHING   // one open job per type+series</code></pre>
+
+<h3>5.3 Ticker: is a candle due?</h3>
+<pre><code>@Scheduled(fixedDelay = 60_000)             // fixed DELAY: runs never overlap
+void tick() {
+    for (series s : activeLiveRelevantSeries()) {
+        Instant nextClose = s.newestOpenTime() + 2 * s.timeframe();   // the candle after the newest has closed
+        if (nextClose + SAFETY_DELAY &lt;= now())                        // e.g. 10 s after the close
+            schedule(FETCH_LATEST, s, from = s.newestOpenTime());
+    }
+}</code></pre>
+<p>Due-based, not clock-based: it works for any timeframe and for exchange-specific boundaries (:30 UTC), and a series that missed a tick
+is simply still due on the next one. For a passively collected coin the same rule applies with a relaxed interval (≈ once per day).</p>
+
+<h3>5.4 Worker</h3>
+<pre><code>loop (one per exchange, sharing that exchange's throttled client):
+    job = SELECT * FROM market_job
+          WHERE status = 'PENDING' AND next_run_at &lt;= now()
+          ORDER BY priority, created_at
+          LIMIT 1 FOR UPDATE SKIP LOCKED
+    mark RUNNING
+    execute ONE chunk                      // one 500-candle page, or one derive block
+    in the same transaction:
+        upsert candles, update market_series, move cursor,
+        advance watermark + record events (section 7)
+    finished? -&gt; DONE
+    more?     -&gt; PENDING                    // re-queued: LIVE work can run before the next chunk
+    error?    -&gt; attempts++, next_run_at = later, last_error; FAILED after N attempts
+
+on startup: RUNNING jobs -&gt; PENDING        // crash recovery, resume from cursor</code></pre>
+<ul>
+  <li><b>One chunk per pick</b> is what makes priorities work: a 140-page backfill never delays a fresh candle.</li>
+  <li>Backfill and live fetching never overlap: live extends the series forward from the newest candle, history extends it backward from the oldest.</li>
+  <li><code>SKIP LOCKED</code> also allows several app instances later. Libraries such as db-scheduler or JobRunr implement the same idea; a single table + loop is enough to start.</li>
+</ul>
+
+<h3>5.5 Rate-limit budget (Nobitex, documented 60/min)</h3>
+<table>
+  <tr><th>Situation</th><th>Calls</th><th>Time at ~1 call/s</th></tr>
+  <tr><td>40 coins, H1 subscribed, live</td><td>40 per hour</td><td>~45 s after each close, idle otherwise</td></tr>
+  <tr><td>100 coins collected passively (M5)</td><td>~100 per day</td><td>negligible</td></tr>
+  <tr><td>New coin: deep H1 + 7 days M5</td><td>~145 once</td><td>~2.5 min, in the background</td></tr>
+  <tr><td>40 coins initial backfill</td><td>~5,800 once</td><td>~1.6 h, interleaved with live work</td></tr>
+</table>
+
+<h2 class="pb">6. Series lifecycle and statuses</h2>
+<table>
+  <tr><th>Level</th><th>Statuses</th><th>Meaning</th></tr>
+  <tr><td>Coin collection (base + deep H1)</td><td><code>BACKFILLING</code> → <code>COLLECTING</code></td><td>is base data still being fetched?</td></tr>
+  <tr><td>Series (coin + timeframe)</td><td><code>WARMING_UP</code> → <code>LIVE</code> ⇄ <code>STALE</code>, <code>INACTIVE</code></td><td>may a subscriber act on it?</td></tr>
+</table>
+<pre>
+              subscribe / new series
+                       │
+                       ▼
+               ┌──────────────┐  enough history (≥ minHistory)  ┌────────┐
+               │  WARMING_UP  │ ──────── AND caught up ───────► │  LIVE  │
+               └──────────────┘                                 └───┬────┘
+                                                 gap / falling behind│  ▲ caught up again
+                                                                    ▼  │
+                                                                ┌────────┐
+                                                                │ STALE  │
+                                                                └────────┘
+     last subscriber unsubscribes (any state) ──► INACTIVE  (maintenance stops, data kept)
+</pre>
+<ul>
+  <li><b>WARMING_UP:</b> no events, no strategy evaluation. Reads are allowed (with coverage information).</li>
+  <li><b>LIVE</b> requires both: at least the subscriber's <code>minHistory</code> gap-free candles <i>and</i> the newest stored candle is the latest closed one.</li>
+  <li><b>STALE:</b> data fell behind or has a gap (exchange outage, our downtime). Strategy must not act until LIVE again.</li>
+  <li>Every status change is published as <code>SeriesStatusChanged</code>, so subscribers start, pause and resume without polling.</li>
+</ul>
+
+<h2>7. Consistency rules</h2>
+<ol>
+  <li><b>A series only grows at its two ends.</b> FETCH_LATEST extends it forward from the newest stored candle (never "now minus something");
+      BACKFILL_HISTORY extends it backward from the oldest. The ranges are disjoint, so jobs can interleave freely.</li>
+  <li><b>Only growth at the newest end publishes events.</b> Backfilled history and bulk derivation never trigger analysis or strategy.</li>
+  <li><b>Stored ≠ published.</b> <code>published_until</code> is the watermark up to which the series is gap-free and announced.
+      After every write, one "advance" step publishes the longest gap-free run after the watermark, in one event.</li>
+  <li><b>The advance step is serialized per series</b> (<code>SELECT … FROM market_series … FOR UPDATE</code>): watermark move, event record
+      (outbox row later) and candle writes are one transaction, so nothing is announced twice.</li>
+  <li><b>Derived candles follow the base watermark:</b> an H1 candle is derived only when the base series' watermark has passed the end of that hour.
+      A gap delays the derived candle instead of producing a wrong one.</li>
+  <li><b>Corrections</b> (a stored, published candle whose values change): detect and log only, for now. A <code>CandlesCorrected</code>
+      event + recomputation in analysis is added only if it is seen in practice.</li>
+</ol>
+<pre><code>advance(series):                                   // under row lock on market_series
+  run = longest gap-free run of stored candles starting at published_until + timeframe
+  if run is empty:
+      if stored candles exist beyond a gap -&gt; schedule gap-fill FETCH_LATEST (LIVE priority); mark STALE if needed
+      return
+  published_until = run.last.openTime
+  record CandlesClosed(series, run)                 // in-process publish now; outbox row later (Kafka)</code></pre>
+
+<h2 class="pb">8. Subscriptions and events</h2>
+<h3>8.1 Contract between analysis and marketdata</h3>
+<pre><code>// marketdata API (called by analysis; marketdata never calls analysis directly)
+SeriesStatus subscribe(String subscriberId, Market market, Timeframe timeframe, int minHistory);
+void         unsubscribe(String subscriberId, Market market, Timeframe timeframe);
+List&lt;Candle&gt; getCandles(Market market, Timeframe timeframe, Instant from, Instant to);       // also derive-on-read
+List&lt;Candle&gt; getLatestClosed(Market market, Timeframe timeframe, int count);
+
+// events (through a publisher port: in-process now, Kafka + outbox later)
+record SeriesStatusChanged(Market market, Timeframe timeframe, SeriesStatus status, Instant watermark) {}
+record CandlesClosed(Market market, Timeframe timeframe, List&lt;Candle&gt; candles) {}   // ordered, gap-free, normally 1 candle</code></pre>
+<ul>
+  <li>Subscribing is idempotent and stored durably; subscribers re-subscribe on every startup (a no-op if unchanged).</li>
+  <li>Events are sent only for series with at least one subscriber, and only while the series is LIVE.</li>
+  <li>A series is published <b>once</b>, however many subscribers it has (two strategies on BTC/USDT H1 share it).</li>
+  <li><b>One event per fetch:</b> a catch-up of 30 candles arrives as one ordered batch, not 30 events. In normal operation the batch holds one candle.</li>
+  <li><b>Handover:</b> the LIVE status event carries the watermark. The subscriber reads history up to it once; every <code>CandlesClosed</code>
+      afterwards starts right after it. Nothing is missed or processed twice.</li>
+  <li>Coin collection continues regardless of subscriptions (it is driven by the collected universe).</li>
+</ul>
+
+<h3>8.2 Why events, and why not Kafka/Flink now</h3>
+<ul>
+  <li>A second scheduler in analysis would duplicate marketdata's and add latency; marketdata already knows the moment a candle is stored.</li>
+  <li>Kafka/Flink are built for orders of magnitude more data and add infrastructure to run. Flink-style stream computation is not needed: ta4j computes our indicators directly.</li>
+  <li>Later, a Kafka publisher replaces the in-process one: candle writes and an <b>outbox</b> row are written in one transaction; a relay sends the outbox to Kafka (no dual-write problem). Keyed by market, events stay ordered per series.</li>
+</ul>
+
+<h2>9. Analysis and strategy</h2>
+<h3>9.1 Analysis is stateless</h3>
+<ul>
+  <li>On <code>CandlesClosed</code>: read the last ~500 candles from marketdata, compute indicators, store a <b>feature snapshot</b> per new candle.</li>
+  <li>No in-memory window, no warm-up/resync logic. Reading 500 rows once per hour is trivial.</li>
+  <li><b>Warm-up:</b> recursive indicators (EMA, Wilder's RSI/ATR) need roughly 5–10× their period to converge, so the window is ~300–500
+      candles, not 14 and not 70,000. The longest indicator period defines <code>minHistory</code> in the subscription.</li>
+  <li>Results must be stored: auditability (what did the indicators say at decision time), charts (roadmap iteration 3), and strategy input.</li>
+</ul>
+<h3>9.2 Who determines the timeframe</h3>
+<p>The <b>strategy</b>. An indicator only has a period (EMA 20 = last 20 candles); the timeframe belongs to the series it runs on.
+A strategy declares market(s), timeframe(s) and indicators with parameters (multi-timeframe is possible, e.g. trend on H4, entry on H1).
+Analysis computes the union of what active strategies need and subscribes accordingly.</p>
+<pre><code>strategy  ──declares──►  (market, timeframe, indicators + parameters)
+analysis  ──derives────►  per (market, timeframe): indicators to compute, minHistory ≈ 10 × longest period
+analysis  ──subscribe──►  marketdata</code></pre>
+<h3>9.3 Idempotency and freshness</h3>
+<ul>
+  <li><b>Unique keys</b> instead of "seen event" bookkeeping: feature snapshots keyed by
+      <code>(exchange, symbol, timeframe, open_time, indicator_config_version)</code>; proposals by
+      <code>(strategy, exchange, symbol, timeframe, open_time)</code>. A replayed or duplicated event becomes a no-op.</li>
+  <li>What must never duplicate is a <b>side effect</b> (a second BUY), hence the unique key on proposals.</li>
+  <li><b>Freshness rule:</b> only the latest candle of a batch, and only if it closed within the last timeframe, reaches strategy.
+      Catch-up candles update indicators/snapshots but never trade.</li>
+  <li>The config version in the key allows deliberate recomputation after a parameter change (EMA 20 → 21).</li>
+</ul>
+
+<h2 class="pb">10. Sample flows</h2>
+<h3>(a) Normal hourly close (BTC/USDT, H1 subscribed, base M5)</h3>
+<pre><code>14:30:10  ticker: BTC base series due (hour 13:30–14:30 closed + 10 s)  -&gt; FETCH_LATEST (LIVE)
+14:30:11  worker: 1 REST call, M5 from newest stored -&gt; 12 closed M5 candles
+          tx: upsert M5 · derive H1 13:30 (skip v=0 fillers) · advance watermarks
+              · record CandlesClosed(BTC/USDT, H1, [13:30])
+14:30:11  analysis: read last 500 H1 -&gt; EMA20/50, RSI14, ATR14, avg volume -&gt; store snapshot
+          candle is fresh -&gt; strategy evaluates -&gt; proposal (or nothing)</code></pre>
+
+<h3>(b) App down for 4 hours → catch-up</h3>
+<pre><code>restart   reconciler: nothing missing structurally; RUNNING jobs reset to PENDING
+          series status STALE (behind) -&gt; SeriesStatusChanged(STALE)
+ticker    FETCH_LATEST from newest stored candle -&gt; 48 M5 candles in one call
+worker    derive 4 H1 candles; watermark advances by 4
+          -&gt; CandlesClosed(BTC/USDT, H1, [10:30, 11:30, 12:30, 13:30]); status LIVE
+analysis  one computation, 4 snapshots; only 13:30 is fresh -&gt; strategy;
+          the 3 older candles never trade</code></pre>
+
+<h3>(c) Analysis subscribes to ETH/USDT H4 (ETH not collected yet)</h3>
+<pre><code>subscribe('analysis', ETH/USDT, H4, minHistory = 500)  -&gt; status WARMING_UP
+reconciler  ETH added to collection: INITIAL_PAGE, BACKFILL_RECENT (M5, 7 days), BACKFILL_HISTORY (H1, ~140 chunks)
+            H4 series (DERIVED) -&gt; DERIVE job (waits for source coverage, re-schedules itself)
+worker      drains jobs in ~3 min, BTC's FETCH_LATEST still runs first every hour
+            ETH H4 reaches 500 gap-free candles and is caught up
+            -&gt; SeriesStatusChanged(ETH/USDT, H4, LIVE, watermark = 2026-11-15T12:30Z)
+analysis    reads history up to the watermark once, then follows CandlesClosed events
+note        ETH M5 exists only from today (7 days back); deep history is native H1</code></pre>
+
+<h3>(d) Duplicate or late event</h3>
+<pre><code>CandlesClosed(BTC/USDT, H1, [13:30]) delivered twice (e.g. Kafka at-least-once, later)
+analysis   INSERT snapshot ... ON CONFLICT DO NOTHING -&gt; no-op
+strategy   proposal key (strategy, BTC/USDT, H1, 13:30) already exists -&gt; no second proposal
+late event (hours old) -&gt; candle not fresh -&gt; never reaches strategy</code></pre>
+
+<h3>(e) Gap → STALE → LIVE</h3>
+<pre><code>exchange unreachable for 20 min; FETCH_LATEST fails, retried with back-off
+series falls behind -&gt; SeriesStatusChanged(STALE) -&gt; strategy pauses on this series
+exchange back -&gt; FETCH_LATEST fetches the missing range -&gt; watermark advances
+-&gt; one CandlesClosed batch + SeriesStatusChanged(LIVE)</code></pre>
+
+<h2>11. Agents (future hooks, nothing built now)</h2>
+<table>
+  <tr><th></th><th>Exploratory (agent, backtests, research)</th><th>Operational (active strategies)</th></tr>
+  <tr><td>Needs</td><td>any coin, any timeframe, deep history</td><td>specific series, live, with events</td></tr>
+  <tr><td>Access</td><td>read-only queries, <b>derive on read</b>, no registration</td><td>subscriptions → LIVE series → events</td></tr>
+  <tr><td>Side effects</td><td>none</td><td>series maintained while subscribed</td></tr>
+</table>
+<ul>
+  <li>Strategy discovery works on history, so the <b>broad collected universe</b> is what makes it possible (M5 cannot be recovered after 7 days).</li>
+  <li>Market scan: <code>/market/stats</code> returns 24 h statistics for all markets in one call (volume, change, best bid/ask).</li>
+  <li>Strategy definitions should be <b>data</b> (market, timeframe, indicators, parameters), so agent-proposed and hand-written strategies take the same path:
+      backtest → shadow/paper → human approval → subscription → live. Agents propose; they never bypass risk or execution controls.</li>
+</ul>
+
+<h2>12. Deferred and open points</h2>
+<table>
+  <tr><th>Item</th><th>Status</th></tr>
+  <tr><td>WebSocket (candles/trades)</td><td>Later, as a live price feed for paper trading, stop monitoring and dashboards. Not a candle source (snapshot problem; trades have no ID/sequence, no trade history to repair gaps).</td></tr>
+  <tr><td>Corrections path (<code>CandlesCorrected</code> + recompute)</td><td>Only if corrections are observed; detection/logging is in place from the start.</td></tr>
+  <tr><td>Kafka (+ outbox), multiple app instances</td><td>When there is a measured need; interfaces already allow it.</td></tr>
+  <tr><td>TimescaleDB / partitioning</td><td>If candle volume (~4 M rows/year per 40 coins at M5) ever becomes a problem.</td></tr>
+  <tr><td>Exchange capability descriptor</td><td>History depth per resolution, max candles per call, alignment, rate limits: needed once a second exchange is added.</td></tr>
+  <tr><td>M1 collection</td><td>Not needed by planned strategies; can be enabled per exchange via the base-resolution setting.</td></tr>
+  <tr><td>Backtest / paper-trading pass thresholds</td><td>Still open (from the main plan); must be set before the first backtest.</td></tr>
+</table>
+<p class="small">Design notes for a learning project, not financial advice.</p>
+
+</body>
+</html>
