@@ -1,5 +1,6 @@
 package com.rmrx.marketnexus.marketdata.service.tracking.publish;
 
+import com.rmrx.marketnexus.marketdata.service.tracking.tracker.CompleteHistory;
 import com.rmrx.marketnexus.marketdata.service.tracking.tracker.SeriesKey;
 import com.rmrx.marketnexus.marketdata.service.tracking.tracker.TrackingListener;
 import com.rmrx.marketnexus.marketdata.service.config.CandleKafkaProperties;
@@ -8,10 +9,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
 
 /**
- * Publishes every change of a series' newest complete run as {@link CandleSeriesHistoryChanged} to Kafka
+ * Publishes every change of a series' complete history as {@link CandleSeriesHistoryChanged} to Kafka
  * ({@code market-data.kafka.topics.candle-series-tracking}), for analysis. Key = series ({@code exchange:symbol:timeframe}),
  * so the messages of one series stay in order.
  * <p>
@@ -31,8 +31,8 @@ public class KafkaTrackingPublisher implements TrackingListener {
     }
 
     @Override
-    public void onNewestRunChanged(SeriesKey series, long newestRunLength, Instant newestOpenTime) {
-        CandleSeriesHistoryChanged change = CandleSeriesHistoryChanged.of(series, newestRunLength, newestOpenTime);
+    public void onCompleteHistoryChanged(SeriesKey series, CompleteHistory history) {
+        CandleSeriesHistoryChanged change = CandleSeriesHistoryChanged.of(series, history);
         try {
             kafka.send(topic, change.seriesKey(), CandleSeriesHistoryChangedJson.toBytes(change))
                     .whenComplete((result, error) -> {

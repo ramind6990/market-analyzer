@@ -9,9 +9,8 @@ import java.util.Objects;
  * @param newRange         the missing range this candle revealed ({@link Kind#GAP_OPENED}, {@link Kind#BACKFILL_DETACHED});
  *                         {@code null} otherwise
  * @param newestRun        newest run after the change; {@code null} only for {@link Kind#MISALIGNED} on an empty book
- * @param newestRunChanged whether the newest run grew, merged or was replaced by this candle
  */
-public record TrackingEvent(Kind kind, MissingRange newRange, ContiguousRun newestRun, boolean newestRunChanged) {
+public record TrackingEvent(Kind kind, MissingRange newRange, ContiguousRun newestRun) {
 
     public enum Kind {
         /** First candle of an empty series: starts the first run. */

@@ -13,8 +13,7 @@ import java.util.Objects;
  * The complete run is the contiguous history from the start of the tracked history up to the first open gap.
  * Analysis never computes past it. The message is a hint only: jobs re-derive what to compute from the database.
  * <p>
- * Copy of market-data-service's {@code tracking.publish.CandleSeriesHistoryChanged}; keep both in sync
- * (market-data still publishes the old shape until its publisher is changed).
+ * Copy of market-data-service's {@code tracking.publish.CandleSeriesHistoryChanged}; keep both in sync.
  *
  * @param lastCompleteOpenTime     open time of the newest candle of the complete run
  * @param completeLength           candles in the complete run

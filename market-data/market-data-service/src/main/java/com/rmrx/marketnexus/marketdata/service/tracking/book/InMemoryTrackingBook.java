@@ -33,18 +33,17 @@ public class InMemoryTrackingBook implements TrackingBook {
         synchronized (runs) {
             if (runs.isEmpty()) {
                 runs.put(openTime, openTime);
-                return new TrackingEvent(Kind.FIRST, null, newest(runs), true);
+                return new TrackingEvent(Kind.FIRST, null, newest(runs));
             }
             if (!onGrid(runs.firstKey(), openTime, step)) {
-                return new TrackingEvent(Kind.MISALIGNED, null, newest(runs), false);
+                return new TrackingEvent(Kind.MISALIGNED, null, newest(runs));
             }
 
             Map.Entry<Instant, Instant> before = runs.floorEntry(openTime);
             if (before != null && !openTime.isAfter(before.getValue())) {
-                return new TrackingEvent(Kind.DUPLICATE, null, newest(runs), false);
+                return new TrackingEvent(Kind.DUPLICATE, null, newest(runs));
             }
             Map.Entry<Instant, Instant> after = runs.higherEntry(openTime);
-            ContiguousRun newestBefore = newest(runs);
 
             boolean joinsBefore = before != null && before.getValue().plus(step).equals(openTime);
             boolean joinsAfter = after != null && after.getKey().minus(step).equals(openTime);
@@ -74,8 +73,7 @@ public class InMemoryTrackingBook implements TrackingBook {
                     kind = Kind.RANGE_SPLIT;
                 }
             }
-            ContiguousRun newestAfter = newest(runs);
-            return new TrackingEvent(kind, newRange, newestAfter, !newestAfter.equals(newestBefore));
+            return new TrackingEvent(kind, newRange, newest(runs));
         }
     }
 

@@ -27,7 +27,7 @@ public class JdbcCandleGapRepository implements CandleGapRepository {
             ON CONFLICT (exchange, symbol, timeframe, gap_from) DO UPDATE
             SET gap_to = GREATEST(candle_gap.gap_to, EXCLUDED.gap_to), updated_at = now()
             WHERE NOT candle_gap.filled
-            RETURNING """ + COLUMNS;
+            RETURNING\s""" + COLUMNS;   // \s: a text block drops the trailing space otherwise ("RETURNINGid")
 
     private static final String SELECT_UNFILLED_BY_TIMEFRAME = "SELECT " + COLUMNS + """
             FROM candle_gap

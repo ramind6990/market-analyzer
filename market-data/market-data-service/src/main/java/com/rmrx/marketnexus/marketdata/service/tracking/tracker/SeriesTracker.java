@@ -26,7 +26,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * the consumers of series state ({@link TrackingListener}s, e.g. the Kafka publisher for analysis).
  * <p>
  * Callers hand over closed candles <b>after</b> they are committed. Per series, one call at a time: the book is
- * updated, gaps are written to / settled in {@code candle_gap}, and listeners are told when the newest run changed.
+ * updated, gaps are written to / settled in {@code candle_gap}, and listeners are told when the complete history
+ * changed (see {@link #completeHistory}).
  * Failures are logged and swallowed, so tracking never breaks storing or publishing candles; a restart rebuilds the
  * book from the database.
  */
@@ -43,6 +44,8 @@ public class SeriesTracker {
     private final Map<SeriesKey, ReentrantLock> locks = new ConcurrentHashMap<>();
     /** Unfilled gaps per series, loaded from the database on first use. Only touched under the series lock. */
     private final Map<SeriesKey, List<CandleGap>> openGaps = new ConcurrentHashMap<>();
+    /** Complete history last told to listeners, per series. Only touched under the series lock. */
+    private final Map<SeriesKey, CompleteHistory> lastNotified = new ConcurrentHashMap<>();
 
     @Autowired
     public SeriesTracker(TrackingBook book, CandleGapRepository gapRepository, List<TrackingListener> listeners) {
@@ -80,7 +83,8 @@ public class SeriesTracker {
 
     /**
      * Replaces what is known about a series (startup rebuild): its runs and its unfilled gaps. Gaps the runs already
-     * cover are marked filled right away. Listeners are not told.
+     * cover are marked filled right away. Listeners are told the complete history once, so consumers catch up after
+     * a restart without waiting for the next candle.
      */
     public void load(SeriesKey series, List<ContiguousRun> runs, List<CandleGap> unfilledGaps) {
         ReentrantLock lock = locks.computeIfAbsent(series, key -> new ReentrantLock());
@@ -89,6 +93,7 @@ public class SeriesTracker {
             book.load(series, runs);
             openGaps.put(series, new ArrayList<>(unfilledGaps));
             settleGaps(series, clock.instant());
+            notifyIfChanged(series, true);
         } finally {
             lock.unlock();
         }
@@ -96,11 +101,9 @@ public class SeriesTracker {
 
     private void track(SeriesKey series, List<Instant> openTimes) {
         Instant now = clock.instant();
-        boolean newestRunChanged = false;
         boolean historyChanged = false;
         for (Instant openTime : openTimes) {
             TrackingEvent event = book.apply(series, openTime);
-            newestRunChanged |= event.newestRunChanged();
             switch (event.kind()) {
                 case GAP_OPENED -> {
                     log.info("Gap in {}: {} (next candle {})", series, event.newRange(), openTime);
@@ -118,9 +121,43 @@ public class SeriesTracker {
         if (historyChanged) {
             settleGaps(series, now);
         }
-        if (newestRunChanged) {
-            book.newestRun(series).ifPresent(run -> notifyListeners(series, run));
+        notifyIfChanged(series, false);
+    }
+
+    /** Tells listeners when the complete point or the complete run's length changed (always when {@code force}). */
+    private void notifyIfChanged(SeriesKey series, boolean force) {
+        CompleteHistory last = lastNotified.get(series);
+        completeHistory(series, last).ifPresent(history -> {
+            if (force || !history.sameCompleteRun(last)) {
+                lastNotified.put(series, history);
+                notifyListeners(series, history);
+            }
+        });
+    }
+
+    /**
+     * Complete history = runs up to the oldest blocking range. A missing range blocks when it overlaps an unfilled
+     * {@code candle_gap} row (a forward gap: candles after it arrived first). Missing ranges before known history
+     * (backfill of old history) or without a gap row do not block, so a deep backfill never moves the complete point
+     * back. A partly filled gap moves the complete point as soon as candles join the run before it.
+     */
+    private Optional<CompleteHistory> completeHistory(SeriesKey series, CompleteHistory last) {
+        List<ContiguousRun> runs = book.runs(series);
+        if (runs.isEmpty()) {
+            return Optional.empty();
         }
+        List<CandleGap> gaps = openGaps(series);
+        ContiguousRun complete = runs.getLast();
+        List<MissingRange> missing = book.missingRanges(series);
+        for (int i = 0; i < missing.size(); i++) {
+            MissingRange range = missing.get(i);
+            if (gaps.stream().anyMatch(gap -> range.overlaps(gap.from(), gap.to()))) {
+                complete = runs.get(i);
+                break;
+            }
+        }
+        return Optional.of(new CompleteHistory(complete.to(), complete.length(series.timeframe()),
+                last == null ? null : last.lastCompleteOpenTime(), runs.getLast().to()));
     }
 
     /** Marks unfilled gaps of a series filled once the book has every candle of them. */
@@ -157,11 +194,10 @@ public class SeriesTracker {
         return openGaps.computeIfAbsent(series, key -> new ArrayList<>(gapRepository.findUnfilled(key)));
     }
 
-    private void notifyListeners(SeriesKey series, ContiguousRun newest) {
-        long length = newest.length(series.timeframe());
+    private void notifyListeners(SeriesKey series, CompleteHistory history) {
         for (TrackingListener listener : listeners) {
             try {
-                listener.onNewestRunChanged(series, length, newest.to());
+                listener.onCompleteHistoryChanged(series, history);
             } catch (RuntimeException e) {
                 log.error("Tracking listener {} failed for {}", listener.getClass().getSimpleName(), series, e);
             }

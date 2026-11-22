@@ -67,7 +67,8 @@ market-data:
         retention: 30d            # first-run lookback (deeper H1 history comes from the separate script)
         grid-offset: 30m          # Nobitex hours start at :30 UTC
   tracking:
-    rebuild-candles: 1000         # startup rebuild lookback per series, in candles of its timeframe
+    rebuild-candles: 2000         # startup rebuild lookback per series, in candles of its timeframe; bounds the
+                                  # completeLength published after a restart (analysis warmup needs ~1,020)
                                   # (further back if an unfilled gap is older)
     # timeframes: [M1, M5, H1]    # tracked timeframes per symbol; default all
   ingestion:
