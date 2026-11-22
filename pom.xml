@@ -25,6 +25,7 @@
         <!-- Spring Boot's BOM manages Jackson, SLF4J, Logback, JUnit, Kafka, Flyway, PostgreSQL driver, ... -->
         <spring-boot.version>4.1.2</spring-boot.version>
         <ta4j.version>0.18</ta4j.version>
+        <ta-lib.version>0.4.0</ta-lib.version>
     </properties>
 
     <dependencyManagement>
@@ -52,6 +53,12 @@
                 <groupId>org.ta4j</groupId>
                 <artifactId>ta4j-core</artifactId>
                 <version>${ta4j.version}</version>
+            </dependency>
+            <!-- reference values for self-built indicators (manual comparison harness only) -->
+            <dependency>
+                <groupId>com.tictactec</groupId>
+                <artifactId>ta-lib</artifactId>
+                <version>${ta-lib.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

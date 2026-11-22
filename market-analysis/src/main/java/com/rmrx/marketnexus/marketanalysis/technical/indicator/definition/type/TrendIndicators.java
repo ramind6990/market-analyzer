@@ -23,6 +23,7 @@ import org.ta4j.core.num.Num;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 import static com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.ComputationModel.COMPOSITE;
 import static com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.ComputationModel.RECURSIVE;
@@ -41,12 +42,56 @@ public final class TrendIndicators {
     public static final String DPO = "DPO";
     public static final String MASS_INDEX = "MASS_INDEX";
     public static final String LINREG = "LINREG";
+    public static final String RWI = "RWI";
 
     private TrendIndicators() {
     }
 
     public static List<IndicatorDefinition> definitions() {
-        return List.of(ppo(), aroon(), supertrend(), ichimoku(), dpo(), massIndex(), linearRegression());
+        return List.of(ppo(), aroon(), supertrend(), ichimoku(), dpo(), massIndex(), linearRegression(), randomWalkIndex());
+    }
+
+    /**
+     * Random walk index (ta4j {@code RWIHighIndicator} / {@code RWILowIndicator}, same formula): high = max(0, max over
+     * n = 2..period of (high - low n-1 bars ago) / (ATR(n) * sqrt(n))), low = max(0, max over n of (high n-1 bars ago -
+     * low) / (ATR(n) * sqrt(n))); NaN until period bars exist. ta4j creates a new ATR per n on every call (each
+     * recomputed from the series start); here ATR(2..period) are shared, seeded ATR nodes, so a bar costs O(period).
+     * An n with ATR 0 is skipped.
+     */
+    static IndicatorDefinition randomWalkIndex() {
+        return define(RWI).description("Random walk index").family(TREND).models(WINDOW, COMPOSITE)
+                .params(ParamDef.integer(PERIOD, 14, 2, 200, "longest distance n")).outputs(
+                        OutputDef.publicOutput("high", "RWI high"), OutputDef.publicOutput("low", "RWI low"))
+                .dependencies(s -> IntStream.rangeClosed(2, period(s))
+                        .mapToObj(n -> ref(atr(n))).toList())
+                .lookback(s -> period(s) - 1).warmup(s -> period(s))
+                .build((c, s) -> {
+                    BarSeries series = c.series();
+                    int begin = series.getBeginIndex();
+                    int period = period(s);
+                    List<Indicator<Num>> atrs = IntStream.rangeClosed(2, period)
+                            .mapToObj(n -> c.source(ref(atr(n)))).toList();
+                    return Map.of(
+                            "high", lambda(c, s, "high", (i, self) -> rwi(series, atrs, begin, i, period, true)),
+                            "low", lambda(c, s, "low", (i, self) -> rwi(series, atrs, begin, i, period, false)));
+                });
+    }
+
+    private static double rwi(BarSeries series, List<Indicator<Num>> atrs, int begin, int i, int period, boolean high) {
+        if (i - period + 1 < begin) {
+            return Double.NaN;
+        }
+        double max = 0;
+        for (int n = 2; n <= period; n++) {
+            double atr = v(atrs.get(n - 2), i);
+            if (atr == 0) {
+                continue;
+            }
+            int back = i - n + 1;
+            double distance = high ? high(series, i) - low(series, back) : high(series, back) - low(series, i);
+            max = Math.max(max, distance / (atr * Math.sqrt(n)));
+        }
+        return max;
     }
 
     /** Percentage price oscillator on any source: line = 100 * (EMA fast - EMA slow) / EMA slow. */

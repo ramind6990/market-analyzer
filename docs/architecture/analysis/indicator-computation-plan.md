@@ -32,8 +32,8 @@ strategy coordinator. Agreed in discussion:
   (stops ta4j recursion there): EMA, Wilder/MMA, SMA-based, gain/loss, TR. Composites (RSI, ATR, MACD,
   Bollinger, Stochastic, ADX...) assembled from them instead of ta4j's closed implementations.
 - Window-only indicators need no seed, just their window of candles.
-- Excluded in v1: RWIHigh, ta4j ParabolicSar (rewrite later as O(1)), repainting/structure, cross-symbol,
-  anchored indicators. Full list with reasons: section 9.
+- Excluded in v1: ta4j RWIHigh and ParabolicSar classes (slow; replaced by fast own versions, see sections 8 and
+  8d), repainting/structure, cross-symbol, anchored indicators. Full list with reasons: section 9.
 
 ## 3. Storage (analysis-owned Flyway migration)
 - `indicator_value(exchange, symbol, timeframe, open_time, layout_version, values float8[])`,
@@ -154,7 +154,8 @@ recomputing from candles:
 1. ~~**Seeding spike**~~ - done, go (see section 8: seeded == full recompute).
 2. market-data event fields (section 1) - read tracking publisher/book first, keep change minimal.
 3. analysis module skeleton: Kafka consumer, candle reader (JdbcClient), Flyway table.
-4. ~~Engine: spec, definitions, graph, seedable blocks, presets~~ - done (section 8), 68 types, 74 presets.
+4. ~~Engine: spec, definitions, graph, seedable blocks, presets~~ - done (section 8), 68 types, 74 presets;
+   plus 33 self-built types (section 8d) and a fast RWI: 102 types, 108 presets.
 5. Job + scheduler + per-series guard + update event.
 6. Retention cleanup; metrics (job duration, queue wait, burst drain time).
 
@@ -195,7 +196,7 @@ Package `com.rmrx.marketnexus.marketanalysis.technical.indicator` (module market
 |---|---|
 | Price transform | TR, HIGHEST, LOWEST (TP / HL2 / OHLC4 are price sources) |
 | Moving average | SMA, EMA, RMA (Wilder/SMMA/MMA), WMA, HMA, DEMA, TEMA, ZLEMA, KAMA, VIDYA, MCGINLEY, VWMA, LSMA |
-| Trend | MACD, PPO, ADX (+DI/-DI), AROON (up/down/osc), SUPERTREND, ICHIMOKU (tenkan/kijun/spanA/spanB), DPO, MASS_INDEX, LINREG (value, slope) |
+| Trend | MACD, PPO, ADX (+DI/-DI), AROON (up/down/osc), SUPERTREND, ICHIMOKU (tenkan/kijun/spanA/spanB), DPO, MASS_INDEX, LINREG (value, slope), RWI (high/low, added 2026-11-23) |
 | Momentum | RSI, STOCH, STOCH_RSI (+k/d), WILLIAMS_R, CCI, ROC, CMO, AO (+accelerator), KST (+signal), COPPOCK, FISHER (+trigger), SQUEEZE (value, level) |
 | Volatility | ATR, BBANDS (+percentB, bandwidth), STDDEV, KELTNER, DONCHIAN, ULCER, CHANDELIER, CHOP |
 | Volume | OBV, AD, CMF, CHAIKIN_OSC, MFI, VWAP (rolling), NVI, PVI (+signal), PVO; volume MA = SMA(source=VOLUME) |
@@ -203,7 +204,12 @@ Package `com.rmrx.marketnexus.marketanalysis.technical.indicator` (module market
 | Candlestick (1/0) | DOJI, BULLISH/BEARISH_ENGULFING, BULLISH/BEARISH_HARAMI, THREE_WHITE_SOLDIERS, THREE_BLACK_CROWS, HAMMER, HANGING_MAN, INVERTED_HAMMER, SHOOTING_STAR (hammer family uses a shared ADX(5) dependency as trend filter, like ta4j) |
 
 Presets: every type with conventional defaults (74 presets, 88 graph nodes, 137 stored values per bar);
-SMA/EMA 200 only from M15 up.
+SMA/EMA 200 only from M15 up. With RWI and the self-built types of section 8d: 108 presets, 147 nodes, 230 stored
+values per bar (history bars still 199, max warm-up 1,020).
+
+RWI matches ta4j's RWIHigh/RWILow exactly. ta4j creates a new ATRIndicator per distance n on every call (each
+recomputed from the series start), which made it pathologically slow; here ATR(2..period) are shared, seeded ATR
+nodes, so a bar costs O(period) (12 extra stored ATR values per bar for RWI_14; ATR(14) is shared with ATR_14).
 
 ### Deliberate deviations from ta4j
 - Bar without range (high == low, e.g. Nobitex filler candles): close location value = 0. ta4j gives NaN, which
@@ -270,46 +276,72 @@ SMA/EMA 200 only from M15 up.
   under several layouts is taken from the newest one; one indicator = its public outputs, and only layouts containing
   it; all = public outputs only.
 
+## 8d. Implementation status (2026-11-23): self-built types without a ta4j counterpart
+Package `...technical.indicator.definition.custom` keeps them apart from the ta4j-based types in `definition.type`:
+one class per family (`CustomMovingAverageIndicators`, `CustomTrendIndicators`, `CustomMomentumIndicators`,
+`CustomVolatilityIndicators`, `CustomVolumeIndicators`, `CustomStatisticalIndicators`,
+`CustomPriceTransformIndicators`), collected by `CustomIndicators.definitions()`; `DefaultIndicatorCatalog` adds them
+with one `addAll`. Presets in `preset.CustomIndicatorPresets` (each type with conventional defaults, all timeframes),
+appended to `IndicatorPresets.all()`. Same building blocks and seeding rules as section 8 (`DefinitionSupport` is
+public for this).
+
+### Reference policy
+- ta4j stays the implementation reference and conventions source (EMA started with the first input, same blocks).
+- Types ta4j lacks are built by us; each javadoc names the definition it follows (TradingView, TA-Lib, pandas-ta,
+  original author).
+- TA-Lib (Java, `com.tictactec:ta-lib`, test scope) and pandas-ta are used **only to compare** the custom types, never
+  at runtime. The original pandas-ta does not install on Python 3.14; the maintained fork `pandas_ta_classic` (same
+  API) is pinned in `tools/indicator-reference/requirements.txt`.
+
+### Implemented (33 types)
+| Family | Types | Reference |
+|---|---|---|
+| Price transform | HEIKIN_ASHI (open/high/low/close) | pandas-ta |
+| Moving average | T3, ALMA, FRAMA, ALLIGATOR (jaw/teeth/lips) | T3: TA-Lib + pandas-ta; ALMA: pandas-ta; FRAMA: formula (Ehlers); ALLIGATOR: formula |
+| Trend | ELDER_RAY (bull/bear), TRIX (+signal), STC, VORTEX (plus/minus), PSAR | pandas-ta; TRIX also TA-Lib; PSAR: TA-Lib |
+| Momentum | BOP (+smoothed), TSI (+signal), CONNORS_RSI, ULTOSC, RVGI (+signal), SQUEEZE_MOMENTUM | BOP/ULTOSC: TA-Lib + pandas-ta; CONNORS_RSI: formula (TradingView) |
+| Volatility | NATR, MA_ENVELOPE (upper/middle/lower), CHAIKIN_VOL, HV | NATR: TA-Lib + pandas-ta; others formula |
+| Volume | RVOL, FORCE_INDEX, PVT, KLINGER (+signal), EOM | pandas-ta; RVOL formula |
+| Statistical | LOG_RETURN, PERCENT_RANK, QUANTILE (preset MEDIAN_20), R_SQUARED, AUTOCORR, HURST, ENTROPY, FRACTAL_DIM | LOG_RETURN/MEDIAN/ENTROPY/AUTOCORR: pandas; others formula |
+
+### Formula choices worth knowing
+- KLINGER is the simplified signed-volume form (pandas-ta `kvo`), not Klinger's trend/cumulative-measurement form.
+- PVT follows TradingView (fraction change * volume); pandas-ta's is 100x (its roc is in percent).
+- ALMA follows TradingView (Gaussian peak near the newest bar for offset 0.85); pandas_ta_classic applies the weights
+  reversed, which equals offset 1 - x.
+- ENTROPY is Shannon entropy of one window (pandas_ta_classic); the original pandas-ta used nested windows.
+- TRIX signal is an EMA (pandas-ta: SMA, so not compared). EOM divisor 10,000 (TradingView; pandas-ta default 1e8).
+- HV annualizes with 365 x 24 h and the bar duration (crypto). HURST: R/S over chunk sizes n, n/2, ... >= 8, 0.5 when
+  fewer than two sizes are usable. CONNORS_RSI percent rank and PERCENT_RANK count previous values <= current
+  (TradingView). FRAMA uses alpha 0.01 on a flat window.
+- Flat filler candles give 0 / neutral values, never NaN that would poison recursion (as in section 8).
+- ALLIGATOR: jaw/teeth/lips = shared RMA (SMMA) nodes of HL2 (13/8/5) read 8/5/3 bars back. The chart's forward
+  shift is a lag at bar i (value of bar i - shift), so it needs only lookback, no future data.
+- PSAR is Wilder's algorithm as in TA-Lib `SAR` (start direction from the minus DM of the first two bars), not ta4j's
+  variant (ta4j's class is pathologically slow). Its state after each bar (next SAR, EP, AF, trend) is stored, so a
+  seeded job does O(1) work per bar.
+- Recursive state stored as INTERNAL outputs: PSAR (nextSar, ep, af, trend), TSI (4 EMAs), KLINGER (2 EMAs), STC (stoch1, smooth1, stoch2),
+  CONNORS_RSI (streak, streak avg gain/loss), CHAIKIN_VOL (range EMA). T3 and TRIX use shared nested EMA nodes.
+
+### Verification (2026-11-23)
+- `IndicatorDemo`: full vs ta4j unchanged (custom types skipped there); seeded vs full max ~2e-10; each preset alone
+  seeded with its own history bars: 108/108 (with RWI, PSAR and ALLIGATOR). Timing (warm): full 1,000 bars ~55-90 ms, seeded 500 bars ~30-40 ms
+  (before the custom types: ~25 ms / ~21-30 ms).
+- `ReferenceComparison` (market-analysis test sources, manual `main`, custom presets only): bars 500..999 of 5 sets,
+  diff normalized by the largest reference value. TA-Lib 6/6 (PSAR exact) and pandas-ta 29/29 outputs within 1e-6 (most ~1e-13;
+  KLINGER ~2e-7 and STC ~1e-8 from different smoothing starts). 14 outputs have no reference and are checked against
+  their formula only (see table). RWI is checked against ta4j in `IndicatorDemo`.
+- Rerun: `ReferenceComparison` once (writes candle CSVs to `market-analysis/target/indicator-reference`), then
+  `tools/indicator-reference/.venv/Scripts/python tools/indicator-reference/pandas_ta_reference.py
+  market-analysis/target/indicator-reference`, then `ReferenceComparison` again.
+
 ## 9. Not implemented (backlog)
-Reasons: **slow** = excluded on purpose; **no ta4j** = ta4j 0.18 has no such indicator (rule for v1: only what
-ta4j has, so values can be checked against it); **model** = does not fit the append-only, per-series seeded model.
+Reasons: **model** = does not fit the append-only, per-series seeded model;
+**not per bar** = output is not one value per bar or is strategy logic. (The former "no ta4j" rows are implemented as
+self-built types, section 8d.)
 
 | Indicator | Reason | Notes for later |
 |---|---|---|
-| RWI (high/low) | slow | pathological in ta4j; rewrite with O(1)/windowed formula |
-| Parabolic SAR | slow | path-dependent recursive; rewrite O(1) as LambdaBlock with state outputs (SAR, EP, AF, trend) |
-| Log return | no ta4j | trivial; ROC covers percent return |
-| Heikin-Ashi | no ta4j indicator (only a bar builder) | recursive HA open; 4 outputs; easy as LambdaBlocks |
-| T3 (Tillson) | no ta4j | 6 chained EMAs via nested EMA sources |
-| FRAMA | no ta4j | recursive + window |
-| ALMA | no ta4j | window, Gaussian weights |
-| MA envelope / ribbon | no ta4j | composition of MAs; strategies can request several MAs |
-| Vortex | no ta4j | window sums |
-| TRIX | no ta4j | ROC of triple EMA; nested EMA sources |
-| Alligator | no ta4j | 3 SMMAs of HL2 shifted forward (display shift only) |
-| MA cross / trend state | no ta4j | strategy logic rather than indicator |
-| Ultimate oscillator | no ta4j | 3 window sums |
-| TSI | no ta4j | 4 chained EMAs + signal |
-| Connors RSI | no ta4j | RSI + streak RSI + percent rank |
-| Elder Ray | no ta4j | high/low minus EMA |
-| Balance of Power | no ta4j | (C-O)/(H-L) smoothed |
-| RVI | no ta4j | window |
-| Schaff Trend Cycle | no ta4j | MACD + two stochastic passes |
-| Squeeze momentum (linreg part) | no ta4j | SQUEEZE has on/off + level only |
-| NATR | no ta4j | ATR / close * 100, trivial |
-| Historical volatility | no ta4j | stddev of log returns, annualization per timeframe |
-| Chaikin volatility | no ta4j | EMA of H-L + ROC |
-| Relative volume (RVOL) | no ta4j (its RelativeVolumeStandardDeviation is a different measure) | V / SMA(V); time-of-day RVOL needs same-hour history |
-| Force Index | no ta4j | EMA of (C - Cprev) * V |
-| Ease of Movement | no ta4j | window |
-| PVT | no ta4j | cumulative |
-| Klinger oscillator | no ta4j | 3 EMAs, trend state |
-| Percentile rank | no ta4j | window, O(N) |
-| Rolling median / quantile | no ta4j | window, O(log N) |
-| R², autocorrelation | no ta4j | window |
-| Hurst exponent | no ta4j | expensive, O(N log N) |
-| Entropy / fractal dimension | no ta4j | window |
-| Volume profile, TPO / market profile | no ta4j | histogram output; better with lower-TF input |
 | Session VWAP, anchored VWAP | model (anchor/session reset) | ta4j VWAP is rolling only (implemented); needs a calendar/anchor rule parameter |
 | Pivot points (classic, Fibonacci, Camarilla, Woodie, DeMark) | model (cross-timeframe) | ta4j has them; input is the previous higher-TF period |
 | Average daily range | model (cross-timeframe) | needs D1 bars on intraday series |
@@ -319,11 +351,20 @@ ta4j has, so values can be checked against it); **model** = does not fit the app
 | Ichimoku chikou | model (future value) | close shifted back: value of a bar known only 26 bars later |
 | Linear regression intercept | model | ta4j uses the absolute bar index as x; differs between seeded job and full compute (value and slope are offered) |
 
+### Deferred: not one value per bar (left out of the custom types on purpose)
+| Indicator | Why it does not fit | What it would need |
+|---|---|---|
+| Volume profile, TPO / market profile | output is a histogram (volume or time per price level), not one number per bar | a separate output model (fixed bins per bar or a per-series profile table) and preferably lower-timeframe input |
+| MA cross / trend state | strategy logic: an event or state derived from two indicators, not a market measure | belongs in the strategy layer, which reads the MAs it compares |
+| MA ribbon | only a set of moving averages | strategies request the MA specs they need; nothing new to compute (MA_ENVELOPE is implemented) |
+| Time-of-day RVOL | compares volume with the same time of day on previous days, needs same-hour history far beyond the job window | a calendar-aware lookup (e.g. per hour-of-day averages) outside the per-series window; plain RVOL (V / SMA(V)) is implemented |
+
 ## Open TODOs
 - Unfillable gaps policy (market-data).
 - Strategy coordinator (multi-timeframe barrier) consuming `SeriesIndicatorsUpdated`.
-- O(1) Parabolic SAR; remaining catalog indicators (section 9).
-- Preset set is large (137 stored values per bar); decide per timeframe which presets really run.
+- Deferred "not per bar" indicators and the model-dependent rows (section 9).
+- Preset set is large (230 stored values per bar, full compute ~55-90 ms); decide per timeframe which presets really
+  run.
 
 ## Verification
 - Spike: seeded values == full recompute (tolerance 1e-9) for each block/composite.

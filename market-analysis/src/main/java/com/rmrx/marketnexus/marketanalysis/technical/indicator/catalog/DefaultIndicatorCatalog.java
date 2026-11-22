@@ -1,6 +1,7 @@
 package com.rmrx.marketnexus.marketanalysis.technical.indicator.catalog;
 
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.IndicatorDefinition;
+import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.custom.CustomIndicators;
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.type.AdxDefinition;
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.type.AtrDefinition;
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.type.BollingerDefinition;
@@ -23,9 +24,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Indicator types available. Not supported (see docs/indicator-catalog.pdf for the full list): ta4j RWI and Parabolic
- * SAR (pathologically slow), indicators ta4j does not have, repainting/structure, cross-symbol, cross-timeframe and
- * session-anchored indicators.
+ * Indicator types available: ta4j-based types ({@code definition.type}) plus self-built types without a ta4j
+ * counterpart ({@code definition.custom}). RWI and Parabolic SAR are own fast versions (ta4j's classes are
+ * pathologically slow). Not supported (see indicator-computation-plan.md section 9): repainting/structure,
+ * cross-symbol, cross-timeframe and session-anchored indicators, and outputs that are not one value per bar.
  */
 public final class DefaultIndicatorCatalog {
 
@@ -51,6 +53,7 @@ public final class DefaultIndicatorCatalog {
         definitions.addAll(VolumeIndicators.definitions());
         definitions.addAll(StatisticalIndicators.definitions());
         definitions.addAll(CandlestickIndicators.definitions());
+        definitions.addAll(CustomIndicators.definitions());
         return new IndicatorCatalog(definitions);
     }
 }

@@ -5,6 +5,8 @@ import com.rmrx.marketnexus.marketanalysis.technical.indicator.catalog.Indicator
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.compute.ComputationResult;
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.compute.IndicatorComputation;
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.compute.IndicatorRow;
+import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.IndicatorDefinition;
+import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.custom.CustomIndicators;
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.OutputDef;
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.type.AdxDefinition;
 import com.rmrx.marketnexus.marketanalysis.technical.indicator.definition.type.AtrDefinition;
@@ -35,6 +37,8 @@ import com.rmrx.marketnexus.marketdata.model.Timeframe;
 import org.ta4j.core.BarSeries;
 import org.ta4j.core.Indicator;
 import org.ta4j.core.indicators.ATRIndicator;
+import org.ta4j.core.indicators.RWIHighIndicator;
+import org.ta4j.core.indicators.RWILowIndicator;
 import org.ta4j.core.indicators.AccelerationDecelerationIndicator;
 import org.ta4j.core.indicators.AwesomeOscillatorIndicator;
 import org.ta4j.core.indicators.CCIIndicator;
@@ -138,8 +142,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 /**
  * Manual demo of the indicator engine (run {@link #main}); not part of the application.
@@ -163,6 +169,8 @@ public final class IndicatorDemo {
     private static final int CANDLES = 1000;
     private static final int SEEDED_ROWS = 500;
     private static final double TOLERANCE = 1e-9;
+    private static final Set<String> CUSTOM_TYPES = CustomIndicators.definitions().stream()
+            .map(IndicatorDefinition::type).collect(Collectors.toSet());
 
     private IndicatorDemo() {
     }
@@ -317,6 +325,9 @@ public final class IndicatorDemo {
     /** The same indicator built from ta4j's own classes, by output name. Outputs without counterpart are absent. */
     private static Map<String, Indicator<?>> ta4j(BarSeries series, IndicatorSpec spec) {
         Map<String, Indicator<?>> map = new LinkedHashMap<>();
+        if (CUSTOM_TYPES.contains(spec.type())) {
+            return map; // no ta4j counterpart: compared by the reference harness instead
+        }
         String v = OutputDef.VALUE;
         switch (spec.type()) {
             case SmaDefinition.TYPE -> map.put(v, new SMAIndicator(src(series, spec), p(spec, "period")));
@@ -397,6 +408,10 @@ public final class IndicatorDemo {
             case TrendIndicators.DPO -> map.put(v, new DPOIndicator(src(series, spec), p(spec, "period")));
             case TrendIndicators.MASS_INDEX -> map.put(v, new MassIndexIndicator(series, p(spec, "emaPeriod"),
                     p(spec, "sumPeriod")));
+            case TrendIndicators.RWI -> {
+                map.put("high", new RWIHighIndicator(series, p(spec, "period")));
+                map.put("low", new RWILowIndicator(series, p(spec, "period")));
+            }
             case TrendIndicators.LINREG -> {
                 map.put(v, new SimpleLinearRegressionIndicator(src(series, spec), p(spec, "period"),
                         SimpleLinearRegressionType.Y));
@@ -534,7 +549,8 @@ public final class IndicatorDemo {
     }
 
     /** 1,000 consecutive M1 candles, random walk; every 97th candle is a flat filler candle with zero volume. */
-    private static List<Candle> candles(int set) {
+    /** Synthetic M1 candles; every 97th bar is a flat zero-volume filler candle. Shared with the reference harness. */
+    static List<Candle> candles(int set) {
         Random random = new Random(1000L + set);
         List<Candle> candles = new ArrayList<>(CANDLES);
         double price = 50_000 + 5_000 * set;

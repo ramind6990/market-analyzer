@@ -22,6 +22,7 @@ import com.rmrx.marketnexus.marketanalysis.technical.indicator.spec.PriceField;
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
@@ -39,7 +40,8 @@ public final class IndicatorPresets {
             .filter(tf -> tf.duration().compareTo(Duration.ofMinutes(15)) >= 0)
             .collect(Collectors.toCollection(() -> EnumSet.noneOf(Timeframe.class)));
 
-    private static final List<IndicatorPreset> V1 = List.of(
+    /** Presets of the types built on ta4j formulas; {@link #V1} adds the self-built ones. */
+    private static final List<IndicatorPreset> BUILT_IN = List.of(
             preset("SMA_20", sma(20, PriceField.CLOSE), ALL),
             preset("SMA_50", sma(50, PriceField.CLOSE), ALL),
             preset("SMA_200", sma(200, PriceField.CLOSE), FROM_M15),
@@ -82,6 +84,7 @@ public final class IndicatorPresets {
             defaults("DPO_20", TrendIndicators.DPO),
             defaults("MASS_INDEX_9_25", TrendIndicators.MASS_INDEX),
             defaults("LINREG_20", TrendIndicators.LINREG),
+            defaults("RWI_14", TrendIndicators.RWI),
             defaults("STOCH_RSI_14_14_3_3", MomentumIndicators.STOCH_RSI),
             defaults("WILLIAMS_R_14", MomentumIndicators.WILLIAMS_R),
             defaults("CCI_20", MomentumIndicators.CCI),
@@ -121,6 +124,8 @@ public final class IndicatorPresets {
             defaults("INVERTED_HAMMER", CandlestickIndicators.INVERTED_HAMMER),
             defaults("SHOOTING_STAR", CandlestickIndicators.SHOOTING_STAR));
 
+    private static final List<IndicatorPreset> V1 = combine(BUILT_IN, CustomIndicatorPresets.all());
+
     private IndicatorPresets() {
     }
 
@@ -135,6 +140,12 @@ public final class IndicatorPresets {
     /** Specs to resolve into the graph of a series of this timeframe. */
     public static List<IndicatorSpec> specsFor(Timeframe timeframe) {
         return forTimeframe(timeframe).stream().map(IndicatorPreset::spec).toList();
+    }
+
+    private static List<IndicatorPreset> combine(List<IndicatorPreset> builtIn, List<IndicatorPreset> custom) {
+        List<IndicatorPreset> all = new ArrayList<>(builtIn);
+        all.addAll(custom);
+        return List.copyOf(all);
     }
 
     private static IndicatorPreset preset(String name, IndicatorSpec spec, Set<Timeframe> timeframes) {
