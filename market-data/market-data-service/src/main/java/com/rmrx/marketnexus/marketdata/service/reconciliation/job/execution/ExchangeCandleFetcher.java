@@ -1,68 +1,71 @@
 package com.rmrx.marketnexus.marketdata.service.reconciliation.job.execution;
 
+import com.rmrx.marketnexus.exchange.client.ExchangeClient;
+import com.rmrx.marketnexus.exchange.model.ExchangeCandle;
+import com.rmrx.marketnexus.exchange.model.ExchangeOhlcRequest;
+import com.rmrx.marketnexus.exchange.model.ExchangeOhlcResponse;
+import com.rmrx.marketnexus.exchange.model.ExchangeSymbol;
+import com.rmrx.marketnexus.exchange.model.ExchangeTimeframe;
 import com.rmrx.marketnexus.marketdata.model.Candle;
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.Objects;
 
 /**
- * {@link CandleFetcher} over the exchange REST API.
+ * {@link CandleFetcher} over the configured exchange's REST API ({@link ExchangeClient#getOhlc}).
  * <p>
- * NOT IMPLEMENTED YET: {@link #fetch} currently returns {@link #dummyCandles dummy candles} for testing. To be implemented
- * with {@code ExchangeClient.getOhlc(...)} (exchange module): map symbol/timeframe to {@code ExchangeSymbol}/
- * {@code ExchangeTimeframe}, request {@code [from, to]}, keep closed candles and map {@code ExchangeCandle} → {@code Candle}.
+ * Requests exactly the candles of {@code [from, to]} (limit = their count, counted back from {@code to}), keeps only
+ * closed ones and maps them to {@link Candle}. Exchange errors ({@code ExchangeException}) propagate, so the executor
+ * retries with backoff.
  */
 @Component
 public class ExchangeCandleFetcher implements CandleFetcher {
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeCandleFetcher.class);
 
-    private static final Map<String, BigDecimal> START_PRICES = Map.of(
-            "BTC/USDT", new BigDecimal("65000"),
-            "ETH/USDT", new BigDecimal("1800"),
-            "SOL/USDT", new BigDecimal("71"));
-    private static final BigDecimal DEFAULT_START_PRICE = new BigDecimal("100");
-    private static final double MAX_MOVE = 0.002;
+    private final ExchangeClient client;
+
+    public ExchangeCandleFetcher(ExchangeClient client) {
+        this.client = Objects.requireNonNull(client, "client");
+    }
 
     @Override
     public List<Candle> fetch(String exchange, String symbol, Timeframe timeframe, Instant from, Instant to) {
-        List<Candle> candles = dummyCandles(exchange, symbol, timeframe, from, to);
-        log.info("Fetch {} {} {} [{} .. {}]: returning {} DUMMY candle(s) (REST not implemented yet)", exchange, symbol,
-                timeframe, from, to, candles.size());
-        return candles;
-    }
-
-    /** Temporary test data: one random-walk candle for every open time in {@code [from, to]}, stepping by the timeframe. */
-    List<Candle> dummyCandles(String exchange, String symbol, Timeframe timeframe, Instant from, Instant to) {
-        ThreadLocalRandom random = ThreadLocalRandom.current();
-        BigDecimal price = START_PRICES.getOrDefault(symbol, DEFAULT_START_PRICE);
-        int scale = Math.max(price.scale(), 2);
-        List<Candle> candles = new ArrayList<>();
-        for (Instant open = from; !open.isAfter(to); open = open.plus(timeframe.duration())) {
-            BigDecimal openPrice = move(price, scale, random);
-            BigDecimal closePrice = move(openPrice, scale, random);
-            BigDecimal high = openPrice.max(closePrice)
-                    .multiply(BigDecimal.valueOf(1 + random.nextDouble() * MAX_MOVE / 2)).setScale(scale, RoundingMode.HALF_UP);
-            BigDecimal low = openPrice.min(closePrice)
-                    .multiply(BigDecimal.valueOf(1 - random.nextDouble() * MAX_MOVE / 2)).setScale(scale, RoundingMode.HALF_UP);
-            BigDecimal volume = BigDecimal.valueOf(random.nextDouble() * 0.05).setScale(6, RoundingMode.HALF_UP);
-            candles.add(new Candle(exchange, symbol, timeframe, open, openPrice, high, low, closePrice, volume));
-            price = closePrice;
+        if (!client.exchangeType().name().equals(exchange)) {
+            throw new IllegalArgumentException("Job for exchange " + exchange + ", but the configured exchange is "
+                    + client.exchangeType());
         }
+        ExchangeSymbol exchangeSymbol = parse(symbol);
+        ExchangeTimeframe exchangeTimeframe = ExchangeTimeframe.valueOf(timeframe.name());
+        int count = (int) (Duration.between(from, to).dividedBy(timeframe.duration()) + 1);
+
+        ExchangeOhlcResponse response = client.getOhlc(
+                new ExchangeOhlcRequest(exchangeSymbol, exchangeTimeframe, from, to, count));
+        List<Candle> candles = response.closedCandles().stream()
+                .map(c -> toCandle(exchange, symbol, timeframe, c))
+                .toList();
+        log.debug("Fetched {} {} {} [{} .. {}]: {} closed candle(s) of {} requested", exchange, symbol, timeframe,
+                from, to, candles.size(), count);
         return candles;
     }
 
-    private static BigDecimal move(BigDecimal price, int scale, ThreadLocalRandom random) {
-        double factor = 1 + (random.nextDouble() * 2 - 1) * MAX_MOVE;
-        return price.multiply(BigDecimal.valueOf(factor)).setScale(scale, RoundingMode.HALF_UP);
+    /** {@code "BTC/USDT"} → {@code ExchangeSymbol(BTC, USDT)}. */
+    private static ExchangeSymbol parse(String symbol) {
+        int slash = symbol.indexOf('/');
+        if (slash <= 0 || slash == symbol.length() - 1) {
+            throw new IllegalArgumentException("Symbol must be BASE/QUOTE: " + symbol);
+        }
+        return ExchangeSymbol.of(symbol.substring(0, slash), symbol.substring(slash + 1));
+    }
+
+    private static Candle toCandle(String exchange, String symbol, Timeframe timeframe, ExchangeCandle candle) {
+        return new Candle(exchange, symbol, timeframe, candle.openTime(), candle.open(), candle.high(), candle.low(),
+                candle.close(), candle.volume());
     }
 }

@@ -112,7 +112,9 @@ public final class TrendIndicators {
                 .dependencies(s -> List.of(ref(fastEma(s)), ref(slowEma(s))))
                 .lookback(s -> 0).warmup(s -> EMA_FACTOR * param(s, "signal"))
                 .build((c, s) -> {
-                    Indicator<Num> line = formula(c, s, "line", x -> (x[0] - x[1]) / x[1] * 100,
+                    // slow EMA 0 (e.g. volume of leading zero-volume filler candles): 0, not NaN, which would poison
+                    // the recursive signal EMA for ever
+                    Indicator<Num> line = formula(c, s, "line", x -> x[1] == 0 ? 0 : (x[0] - x[1]) / x[1] * 100,
                             c.source(ref(fastEma(s))), c.source(ref(slowEma(s))));
                     Indicator<Num> signal = ExponentialBlock.ema(line, param(s, "signal"), c.seed(s, "signal"));
                     Indicator<Num> histogram = formula(c, s, "histogram", x -> x[0] - x[1], line, signal);

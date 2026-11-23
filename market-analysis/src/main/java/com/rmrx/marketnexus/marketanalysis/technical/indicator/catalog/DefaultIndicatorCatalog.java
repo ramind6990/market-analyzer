@@ -26,7 +26,7 @@ import java.util.List;
 /**
  * Indicator types available: ta4j-based types ({@code definition.type}) plus self-built types without a ta4j
  * counterpart ({@code definition.custom}). RWI and Parabolic SAR are own fast versions (ta4j's classes are
- * pathologically slow). Not supported (see indicator-computation-plan.md section 9): repainting/structure,
+ * pathologically slow). Not supported (see .claude/context/analysis/indicator-computation.md, "Missing and why"): repainting/structure,
  * cross-symbol, cross-timeframe and session-anchored indicators, and outputs that are not one value per bar.
  */
 public final class DefaultIndicatorCatalog {

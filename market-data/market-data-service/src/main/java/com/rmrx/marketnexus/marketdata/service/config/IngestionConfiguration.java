@@ -2,6 +2,7 @@ package com.rmrx.marketnexus.marketdata.service.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import com.rmrx.marketnexus.exchange.client.ExchangeClient;
 import com.rmrx.marketnexus.exchange.client.ExchangeClients;
 import com.rmrx.marketnexus.exchange.client.ExchangeStreamClient;
 import com.rmrx.marketnexus.exchange.config.ExchangeConfig;
@@ -16,17 +17,15 @@ public class IngestionConfiguration {
                 .withWebsocketUrl(properties.websocketUrl());
     }
 
-    /** Real exchange WebSocket, or a generated stream ({@code market-data.ingestion.stream: live | mock | mock-clock | mock-gaps}). */
+    /** Exchange REST client (reconciliation fetches closed candles with it). */
     @Bean(destroyMethod = "close")
-    ExchangeStreamClient exchangeStreamClient(ExchangeConfig exchangeConfig, IngestionProperties properties) {
-        return switch (properties.stream()) {
-            case LIVE -> ExchangeClients.createStream(exchangeConfig);
-            case MOCK -> ExchangeClients.createMockStream(properties.exchangeType(),
-                    properties.mockStream().emitInterval(), properties.mockStream().seed());
-            case MOCK_CLOCK -> ExchangeClients.createClockMockStream(properties.exchangeType(),
-                    properties.mockStream().seed());
-            case MOCK_GAPS -> ExchangeClients.createGapMockStream(properties.exchangeType(),
-                    properties.mockStream().seed());
-        };
+    ExchangeClient exchangeClient(ExchangeConfig exchangeConfig) {
+        return ExchangeClients.create(exchangeConfig);
+    }
+
+    /** Exchange WebSocket (live M1 ingestion). */
+    @Bean(destroyMethod = "close")
+    ExchangeStreamClient exchangeStreamClient(ExchangeConfig exchangeConfig) {
+        return ExchangeClients.createStream(exchangeConfig);
     }
 }

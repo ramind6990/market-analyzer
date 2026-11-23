@@ -55,7 +55,7 @@ final class WindowBook {
 
     /** Adds or replaces a child and emits the parent (progressive or closed). */
     void onChild(CandleUpdate child, TimerService timers, Collector<CandleUpdate> out) throws Exception {
-        long start = timeframe.windowStart(child.openTime());
+        long start = timeframe.windowStart(child.exchange(), child.openTime());
         if (closedWindows.contains(start)) {
             LOG.info("Dropping late {} child {} for closed {} window {}", child.timeframe(), child.openTime(),
                     timeframe, start);
@@ -75,7 +75,7 @@ final class WindowBook {
 
     /** Emits an authoritative closed candle (REST H1) for its window, replacing whatever was collected. */
     void onDirect(CandleUpdate direct, Collector<CandleUpdate> out) throws Exception {
-        long start = timeframe.windowStart(direct.openTime());
+        long start = timeframe.windowStart(direct.exchange(), direct.openTime());
         out.collect(direct);
         close(start);
     }
@@ -86,7 +86,7 @@ final class WindowBook {
         Iterator<Map.Entry<Long, CandleUpdate>> it = children.iterator();
         while (it.hasNext()) {
             Map.Entry<Long, CandleUpdate> entry = it.next();
-            long start = timeframe.windowStart(entry.getValue().openTime());
+            long start = timeframe.windowStart(entry.getValue().exchange(), entry.getValue().openTime());
             if (start <= cutoff) {
                 CandleUpdate c = entry.getValue();
                 LOG.warn("{} window {} of {} never completed; dropping child {}", timeframe, start, c.marketKey(),

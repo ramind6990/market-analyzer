@@ -34,7 +34,7 @@ public final class LocalAggregationRunner {
      * purged at {@code windowStart + 7 days} of processing (wall-clock) time.
      */
     private static final Instant START = Instant.ofEpochMilli(
-            Timeframe.D1.windowStart(Instant.now().minus(Duration.ofDays(2))));
+            Timeframe.D1.windowStart(EXCHANGE, Instant.now().minus(Duration.ofDays(2))));
 
     public static void main(String[] args) throws Exception {
         int count = args.length > 0 ? Integer.parseInt(args[0]) : 2000;

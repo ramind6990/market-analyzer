@@ -7,8 +7,9 @@ import java.time.Instant;
  * Timeframes of the aggregation cascade. Each derived timeframe is built from {@link #child()} and completes after
  * {@link #expectedChildren()} closed children.
  * <p>
- * Windows follow the exchange grid: Nobitex opens days at 20:30 UTC (and hours at HH:30). All windows are aligned to
- * that anchor, i.e. {@code offset = 20:30 mod duration} — 0 for M1..M30, :30 for H1/H4, 08:30 for H12, 20:30 for D1.
+ * Windows follow the exchange grid, given by a daily anchor per exchange: Nobitex opens days at 20:30 UTC (and hours
+ * at HH:30), so its windows use {@code offset = 20:30 mod duration} — 0 for M1..M30, :30 for H1/H4, 08:30 for H12,
+ * 20:30 for D1. Binance (and any other exchange) uses round UTC boundaries (anchor 00:00).
  */
 public enum Timeframe {
     M1(Duration.ofMinutes(1), null, 0),
@@ -20,8 +21,8 @@ public enum Timeframe {
     H12(Duration.ofHours(12), H4, 3),
     D1(Duration.ofDays(1), H12, 2);
 
-    /** Daily grid anchor (20:30 UTC) all windows are aligned to. */
-    private static final long ANCHOR_MS = Duration.ofHours(20).plusMinutes(30).toMillis();
+    /** Daily grid anchor of Nobitex (20:30 UTC, Tehran midnight). */
+    private static final long NOBITEX_ANCHOR_MS = Duration.ofHours(20).plusMinutes(30).toMillis();
 
     private final Duration duration;
     private final Timeframe child;
@@ -46,10 +47,15 @@ public enum Timeframe {
         return expectedChildren;
     }
 
-    /** Start (epoch ms) of the window of this timeframe that contains {@code time}. */
-    public long windowStart(Instant time) {
+    /** Start (epoch ms) of the window of this timeframe that contains {@code time}, on the grid of {@code exchange}. */
+    public long windowStart(String exchange, Instant time) {
         long durationMs = duration.toMillis();
-        long offset = ANCHOR_MS % durationMs;
+        long offset = anchorMs(exchange) % durationMs;
         return Math.floorDiv(time.toEpochMilli() - offset, durationMs) * durationMs + offset;
+    }
+
+    /** Daily grid anchor (ms after 00:00 UTC) of an exchange, e.g. {@code CRYPTO_NOBITEX}; 0 for round UTC days. */
+    static long anchorMs(String exchange) {
+        return "CRYPTO_NOBITEX".equals(exchange) ? NOBITEX_ANCHOR_MS : 0L;
     }
 }

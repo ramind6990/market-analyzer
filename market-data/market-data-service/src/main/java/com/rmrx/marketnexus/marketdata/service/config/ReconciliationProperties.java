@@ -1,13 +1,16 @@
 package com.rmrx.marketnexus.marketdata.service.config;
 
+import com.rmrx.marketnexus.exchange.model.ExchangeType;
 import com.rmrx.marketnexus.marketdata.model.Timeframe;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Settings of reconciliation ({@code market-data.reconciliation.*} in application.yml).
@@ -20,7 +23,9 @@ import java.util.Map;
  * @param retryBackoff          wait before retrying a failed execution; doubles per attempt, capped at 1 hour
  * @param recentWindow          job windows ending within this of now get HIGH priority (recent gaps first)
  * @param worker                job worker settings
- * @param timeframes            timeframes to reconcile, with their settings; only listed timeframes are reconciled
+ * @param exchangeType          configured exchange (same as {@code market-data.ingestion.exchange-type})
+ * @param exchanges             per exchange: timeframes to reconcile, with their settings; only the listed timeframes
+ *                              of {@code exchangeType} are reconciled (retention and candle grid differ per exchange)
  */
 @ConfigurationProperties("market-data.reconciliation")
 public record ReconciliationProperties(
@@ -32,7 +37,8 @@ public record ReconciliationProperties(
         Duration retryBackoff,
         Duration recentWindow,
         Worker worker,
-        Map<Timeframe, TimeframeSettings> timeframes) {
+        ExchangeType exchangeType,
+        Map<ExchangeType, Map<Timeframe, TimeframeSettings>> exchanges) {
 
     private static final Duration MAX_RETRY_BACKOFF = Duration.ofHours(1);
 
@@ -45,9 +51,18 @@ public record ReconciliationProperties(
         retryBackoff = retryBackoff == null ? Duration.ofMinutes(1) : retryBackoff;
         recentWindow = recentWindow == null ? Duration.ofHours(1) : recentWindow;
         worker = worker == null ? new Worker(null, null, null, null) : worker;
-        timeframes = timeframes == null || timeframes.isEmpty()
-                ? Map.of(Timeframe.M1, new TimeframeSettings(Duration.ofDays(7), null))
-                : new EnumMap<>(timeframes);
+        Objects.requireNonNull(exchangeType, "market-data.reconciliation.exchange-type");
+        Map<ExchangeType, Map<Timeframe, TimeframeSettings>> copy = new EnumMap<>(ExchangeType.class);
+        if (exchanges != null) {
+            exchanges.forEach((type, settings) -> copy.put(type, settings == null || settings.isEmpty()
+                    ? Map.of() : Collections.unmodifiableMap(new EnumMap<>(settings))));
+        }
+        exchanges = Collections.unmodifiableMap(copy);
+        Map<Timeframe, TimeframeSettings> timeframes = exchanges.get(exchangeType);
+        if (timeframes == null || timeframes.isEmpty()) {
+            throw new IllegalArgumentException("market-data.reconciliation.exchanges has no timeframes for "
+                    + exchangeType);
+        }
         if (maxWindowCandles < 1 || fetchChunkCandles < 1 || maxAttempts < 1) {
             throw new IllegalArgumentException("market-data.reconciliation: max-window-candles, fetch-chunk-candles "
                     + "and max-attempts must be >= 1");
@@ -84,10 +99,11 @@ public record ReconciliationProperties(
     }
 
     /**
-     * Per-timeframe settings ({@code market-data.reconciliation.timeframes.<TF>.*}).
+     * Per-timeframe settings ({@code market-data.reconciliation.exchanges.<type>.<TF>.*}).
      *
      * @param retention  how far back the exchange keeps this timeframe, or how far back to reconcile on a first run
-     * @param gridOffset where candles of this timeframe start relative to round UTC boundaries (Nobitex H1: 30m)
+     * @param gridOffset where candles of this timeframe start relative to round UTC boundaries (Nobitex H1: 30m,
+     *                   Binance: 0)
      */
     public record TimeframeSettings(Duration retention, Duration gridOffset) {
 
@@ -105,9 +121,14 @@ public record ReconciliationProperties(
         return delay.compareTo(MAX_RETRY_BACKOFF) > 0 ? MAX_RETRY_BACKOFF : delay;
     }
 
+    /** Timeframes reconciled for the configured exchange, with their settings. */
+    public Map<Timeframe, TimeframeSettings> timeframes() {
+        return exchanges.get(exchangeType);
+    }
+
     /** Configured timeframes, smallest first (M1 before H1). */
     public List<Timeframe> reconciledTimeframes() {
-        return timeframes.keySet().stream().sorted().toList();
+        return timeframes().keySet().stream().sorted().toList();
     }
 
     /** Usable history of a timeframe: its retention minus the safety margin. */
@@ -121,7 +142,7 @@ public record ReconciliationProperties(
     }
 
     private TimeframeSettings settings(Timeframe timeframe) {
-        TimeframeSettings settings = timeframes.get(timeframe);
+        TimeframeSettings settings = timeframes().get(timeframe);
         if (settings == null) {
             throw new IllegalArgumentException("Timeframe " + timeframe + " is not configured for reconciliation");
         }

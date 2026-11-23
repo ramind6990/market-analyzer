@@ -57,8 +57,10 @@ public final class NobitexExchangeClient implements ExchangeClient {
         } else {
             countback = null;
         }
+        // Nobitex treats "to" as exclusive (to = T returns candles opened before T), so ask one second further to
+        // include the candle opening at "to"; later candles are filtered out below.
         NobitexOhlcRequest nobitexRequest =
-                new NobitexOhlcRequest(symbol, resolution, to, request.from(), countback, null);
+                new NobitexOhlcRequest(symbol, resolution, to.plusSeconds(1), request.from(), countback, null);
 
         List<NobitexCandle> nobitexCandles;
         try {

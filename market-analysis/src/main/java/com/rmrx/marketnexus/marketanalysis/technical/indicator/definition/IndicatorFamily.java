@@ -1,6 +1,6 @@
 package com.rmrx.marketnexus.marketanalysis.technical.indicator.definition;
 
-/** Indicator families as in the indicator catalog (docs/indicator-catalog.pdf, section 3). */
+/** Indicator families (see .claude/context/analysis/indicator-computation.md). */
 public enum IndicatorFamily {
     PRICE_TRANSFORM,
     MOVING_AVERAGE,

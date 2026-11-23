@@ -28,17 +28,17 @@ public class SeriesIndicatorsPublisher {
     }
 
     public void publish(SeriesIndicatorsUpdated update) {
-        // LOGGING ONLY FOR NOW: Kafka publishing disabled until a consumer (strategy) exists.
-        log.info("Indicators updated: {}", update);
-//        try {
-//            kafka.send(topic, update.seriesKey(), MAPPER.writeValueAsBytes(update))
-//                    .whenComplete((result, error) -> {
-//                        if (error != null) {
-//                            log.warn("Failed to publish {} to {}", update, topic, error);
-//                        }
-//                    });
-//        } catch (RuntimeException e) {
-//            log.warn("Failed to publish {} to {}", update, topic, e);
-//        }
+        try {
+            kafka.send(topic, update.seriesKey(), MAPPER.writeValueAsBytes(update))
+                    .whenComplete((result, error) -> {
+                        if (error != null) {
+                            log.warn("Failed to publish {} to {}", update, topic, error);
+                        } else {
+                            log.debug("Published {} to {}", update, topic);
+                        }
+                    });
+        } catch (RuntimeException e) {
+            log.warn("Failed to publish {} to {}", update, topic, e);
+        }
     }
 }

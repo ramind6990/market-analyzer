@@ -4,62 +4,59 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import com.rmrx.marketnexus.exchange.model.ExchangeType;
 
 import java.net.URI;
-import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
  * Settings of the ingestion app ({@code market-data.ingestion.*} in application.yml).
  *
- * @param exchangeType exchange to stream from, e.g. {@code CRYPTO_NOBITEX}
- * @param baseUrl      exchange REST API root
- * @param websocketUrl exchange WebSocket endpoint
+ * @param exchangeType exchange to stream from: {@code crypto_nobitex} or {@code crypto_binance} (case-insensitive)
+ * @param exchanges    connection settings per exchange; the entry of {@code exchangeType} is used
  * @param userAgent    User-Agent sent to the exchange
  * @param symbols      markets as {@code BASE/QUOTE}, e.g. {@code BTC/USDT}
- * @param stream       where candles come from: {@code live} (exchange WebSocket) or {@code mock} (generated); default mock
- * @param mockStream   settings of the mock stream
  * @param worker       threads that store, track and publish candles
  */
 @ConfigurationProperties("market-data.ingestion")
 public record IngestionProperties(
         ExchangeType exchangeType,
-        URI baseUrl,
-        URI websocketUrl,
+        Map<ExchangeType, Endpoints> exchanges,
         String userAgent,
         List<String> symbols,
-        StreamMode stream,
-        MockStream mockStream,
         Worker worker) {
 
     public IngestionProperties {
         Objects.requireNonNull(exchangeType, "market-data.ingestion.exchange-type");
-        Objects.requireNonNull(baseUrl, "market-data.ingestion.base-url");
-        Objects.requireNonNull(websocketUrl, "market-data.ingestion.websocket-url");
+        exchanges = exchanges == null ? Map.of() : Map.copyOf(exchanges);
+        if (!exchanges.containsKey(exchangeType)) {
+            throw new IllegalArgumentException("market-data.ingestion.exchanges has no entry for " + exchangeType);
+        }
         Objects.requireNonNull(userAgent, "market-data.ingestion.user-agent");
         symbols = symbols == null ? List.of() : List.copyOf(symbols);
-        stream = stream == null ? StreamMode.MOCK : stream;
-        mockStream = mockStream == null ? new MockStream(null, null) : mockStream;
         worker = worker == null ? new Worker(null, null) : worker;
     }
 
-    /**
-     * LIVE = exchange WebSocket, MOCK = endless generated candles (simulated time, faster than real),
-     * MOCK_CLOCK = generated candles following the real clock (one closed candle per period, like the WebSocket),
-     * MOCK_GAPS = one-off history with gaps (reconciliation tests).
-     */
-    public enum StreamMode { LIVE, MOCK, MOCK_CLOCK, MOCK_GAPS }
+    /** REST API root of the configured exchange. */
+    public URI baseUrl() {
+        return exchanges.get(exchangeType).baseUrl();
+    }
+
+    /** WebSocket endpoint of the configured exchange. */
+    public URI websocketUrl() {
+        return exchanges.get(exchangeType).websocketUrl();
+    }
 
     /**
-     * Mock stream ({@code market-data.ingestion.mock-stream.*}).
+     * Endpoints of one exchange ({@code market-data.ingestion.exchanges.<type>.*}).
      *
-     * @param emitInterval real time between two candles of one symbol (default 1 s, i.e. one simulated minute per second)
-     * @param seed         random seed for reproducible data (default 42)
+     * @param baseUrl      exchange REST API root
+     * @param websocketUrl exchange WebSocket endpoint
      */
-    public record MockStream(Duration emitInterval, Long seed) {
+    public record Endpoints(URI baseUrl, URI websocketUrl) {
 
-        public MockStream {
-            emitInterval = emitInterval == null ? Duration.ofSeconds(1) : emitInterval;
-            seed = seed == null ? 42L : seed;
+        public Endpoints {
+            Objects.requireNonNull(baseUrl, "base-url");
+            Objects.requireNonNull(websocketUrl, "websocket-url");
         }
     }
 

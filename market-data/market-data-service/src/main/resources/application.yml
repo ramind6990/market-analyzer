@@ -59,29 +59,35 @@ market-data:
       threads: 3                  # concurrent executions; the shared rate limit bounds throughput
       claim-batch-size: 10        # jobs claimed at once when the queue runs low (<= requests-per-minute)
       idle-poll-interval: 5s      # sleep when no job is due
-      requests-per-minute: 35     # shared budget of REST calls per minute (Nobitex ~60/min)
-    timeframes:
-      M1:
-        retention: 7d             # how long the exchange keeps M1 candles (Nobitex: 7 days)
-      H1:
-        retention: 30d            # first-run lookback (deeper H1 history comes from the separate script)
-        grid-offset: 30m          # Nobitex hours start at :30 UTC
+      requests-per-minute: 35     # shared budget of REST calls per minute (Nobitex ~60/min; Binance far more)
+    exchange-type: ${market-data.ingestion.exchange-type}
+    exchanges:                    # per exchange; only the entry of exchange-type is used
+      crypto_nobitex:
+        M1:
+          retention: 7d           # how long the exchange keeps M1 candles (Nobitex: 7 days)
+        H1:
+          retention: 30d          # first-run lookback (deeper H1 history comes from the separate script)
+          grid-offset: 30m        # Nobitex hours start at :30 UTC
+      crypto_binance:             # full history on Binance: retention = first-run lookback; grid = round UTC
+        M1:
+          retention: 7d
+        H1:
+          retention: 30d
   tracking:
     rebuild-candles: 2000         # startup rebuild lookback per series, in candles of its timeframe; bounds the
                                   # completeLength published after a restart (analysis warmup needs ~1,020)
                                   # (further back if an unfilled gap is older)
     # timeframes: [M1, M5, H1]    # tracked timeframes per symbol; default all
   ingestion:
-    exchange-type: CRYPTO_NOBITEX
-    base-url: https://apiv2.nobitex.ir
-    websocket-url: wss://ws.nobitex.ir/connection/websocket
+    exchange-type: ${EXCHANGE_TYPE:crypto_nobitex}   # crypto_nobitex | crypto_binance
+    exchanges:
+      crypto_nobitex:
+        base-url: https://apiv2.nobitex.ir
+        websocket-url: wss://ws.nobitex.ir/connection/websocket
+      crypto_binance:
+        base-url: https://api.binance.com          # or https://data-api.binance.vision (market data only)
+        websocket-url: wss://stream.binance.com:9443  # or wss://data-stream.binance.vision
     user-agent: TraderBot/rm-trading-0.0.1
-    stream: mock-clock            # live = exchange WebSocket, mock = generated candles (fast, simulated time),
-                                 # mock-clock = generated candles following the real clock (like the WebSocket),
-                                 # mock-gaps = 100 candles/symbol from 8 h ago with 3-4 gaps (reconciliation test)
-    mock-stream:
-      emit-interval: 1s          # one simulated minute per second and symbol
-      seed: 42
     worker:
       threads: 3                 # one symbol always on the same thread (candles of a series stay in order)
       queue-capacity: 10000      # split evenly over the threads

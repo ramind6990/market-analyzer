@@ -14,8 +14,8 @@ import org.springframework.scheduling.config.ScheduledTaskRegistrar;
  * after the previous run finished (fixed delay: runs never overlap). The first periodic run comes one interval after
  * startup; the startup run itself is triggered by the application.
  */
-//@Configuration(proxyBeanMethods = false)
-//@EnableScheduling
+@Configuration(proxyBeanMethods = false)
+@EnableScheduling
 public class ReconciliationScheduler implements SchedulingConfigurer {
 
     private static final Logger log = LoggerFactory.getLogger(ReconciliationScheduler.class);
