@@ -60,8 +60,9 @@ Engine: module `market-analysis`, package `marketanalysis.technical.indicator`, 
   Chaikin vol; T3/TRIX via shared nested EMA nodes.
 
 ## Verification
-- `IndicatorDemo` (manual main, 5 sets × 1,000 M1 candles): full vs ta4j (~1e-12), seeded vs full (~2e-10), each
-  preset alone seeded with its own `historyBars` (108/108), timings.
+- `IndicatorEngineTest` (JUnit, `mvn test -pl market-analysis`, 5 sets × 1,000 synthetic M1 candles, all presets):
+  full vs ta4j (`Ta4jReference`, ~1e-12), seeded vs full (~2e-10, all candles and job candles), each preset alone
+  seeded with its own `historyBars` (108 dynamic tests). Tolerance 1e-9; ta4j NaN where we give a number is allowed.
 - `ReferenceComparison` (test sources, manual main, custom presets): TA-Lib 6/6 and pandas-ta 29/29 outputs within 1e-6.
   Rerun: run it once (writes CSVs to `market-analysis/target/indicator-reference`), then
   `tools/indicator-reference/.venv/Scripts/python tools/indicator-reference/pandas_ta_reference.py

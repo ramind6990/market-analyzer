@@ -32,4 +32,7 @@ Output: `candles-derived` (key `exchange:symbol:timeframe`), stored by market-da
 - Checkpointing on (incomplete windows survive restarts); Kafka sink at-least-once; downstream upserts.
 - Sources start from committed offsets, else EARLIEST. Offsets are only committed on checkpoint: a fresh run against
   topics with old data replays it (seen in testing; reset group offsets first).
+- Cluster deploy: `.infra/deploy-flink-aggregator.sh` (build shaded jar → `.infra/data/flink/target` = jobmanager
+  `/opt/flink/usrlib` → stop running job with savepoint → `flink run -d`, resuming from it; `--fresh`, `--no-build`).
+  Inside compose the broker is `market-analyzer-kafka:9092`.
 - Local run: plain `java` with the test-scope classpath (Flink deps are `provided`) and `--add-opens` for Java 25.

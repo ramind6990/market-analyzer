@@ -18,7 +18,8 @@ In: `candles-derived` (from Flink). Out: `m1-live`, `m1-reconciled`, `h1-reconci
 `candle-series-tracking` (to analysis).
 
 ## Running
-Start the Flink job first (`CandleAggregationJob`, broker `localhost:9892`), then `market-data-service`
+Start the Flink job first: on the compose cluster via `.infra/deploy-flink-aggregator.sh`, or locally
+(`CandleAggregationJob`, broker `localhost:9892`); then `market-data-service`
 (`EXCHANGE_TYPE=crypto_nobitex|crypto_binance`). On a fresh DB with old topic data, move consumer group offsets to
 the topic ends first, or old candles are replayed.
 

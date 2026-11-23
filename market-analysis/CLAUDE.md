@@ -4,7 +4,7 @@ Computes technical indicators per series and publishes them. Triggered by `candl
 (complete history changed); runs one stateless but **seeded** job per series (stored node values incl. hidden
 recursive state let a job continue from the last stored bar instead of recomputing history).
 
-## Layout (package `com.rmrx.marketnexus.marketanalysis`)
+## Layout (package `com.rmrx.marketanalyzer.marketanalysis`)
 - `technical.indicator`: engine (spec, schema, definition, `definition.type` = ta4j-based, `definition.custom` =
   self-built, block, catalog, graph, compute, preset). v1 indicator set = presets only (102 types, 108 presets).
 - `seriestracker`: Kafka listener + own copy of `CandleSeriesHistoryChanged`.

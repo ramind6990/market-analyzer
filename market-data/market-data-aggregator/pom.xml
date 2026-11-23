@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>com.rmrx.market-nexus</groupId>
+        <groupId>com.rmrx.market-analyzer</groupId>
         <artifactId>market-data</artifactId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
@@ -19,7 +19,7 @@
         <flink.version>2.2.1</flink.version>
         <flink.kafka.connector.version>5.0.0-2.2</flink.kafka.connector.version>
         <log4j.version>2.24.3</log4j.version>
-        <main.class>com.rmrx.marketnexus.marketdata.aggregator.CandleAggregationJob</main.class>
+        <main.class>com.rmrx.marketanalyzer.marketdata.aggregator.CandleAggregationJob</main.class>
     </properties>
 
     <dependencies>

@@ -10,3 +10,4 @@ docker-data/
 
 # Python virtual environments (tools)
 .venv/
+data/

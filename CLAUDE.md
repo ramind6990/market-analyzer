@@ -1,4 +1,4 @@
-# market-nexus
+# market-analyzer
 
 A **market analyzer**: collects crypto candles from one exchange, keeps gap-free history for every
 (exchange, symbol, timeframe) series, computes technical indicators on it and publishes the results to Kafka.
@@ -21,7 +21,7 @@ exchange (WebSocket M1, REST for repair)
 | `tools` | dev-only helpers (indicator reference comparison with pandas_ta_classic) |
 
 ## Tech and conventions
-- Java 25, Maven multi-module (groupId `com.rmrx.market-nexus`, packages `com.rmrx.marketnexus.*`), Spring Boot 4,
+- Java 25, Maven multi-module (groupId `com.rmrx.market-analyzer`, packages `com.rmrx.marketanalyzer.*`), Spring Boot 4,
   Jackson 3 (`tools.jackson`), Flink 2.2, Kafka, PostgreSQL + Flyway, plain JDBC (`JdbcClient`, no JPA), ta4j 0.18.
 - Library modules (`exchange`, `market-data-model`) never read env/config; callers pass config objects.
 - At-least-once messaging everywhere; correctness via idempotent upserts keyed by
